@@ -797,6 +797,28 @@ int PipToY(double price, double pmin, double pip, double totalPips, int bottom, 
   }
 
 //+------------------------------------------------------------------+
+//| X coordinate of a path point inside the table                    |
+//| ci  = candle index (0-based), rem = point inside candle (0..3)   |
+//+------------------------------------------------------------------+
+int PathPointX(int ci, int rem, int denom, int left, int right)
+  {
+   int halfSp = (int)MathRound(MathMin(40.0, (double)(right - left) / denom / 2.0));
+   int cap = (right - left) / 4;
+   if(halfSp > cap)
+      halfSp = cap;
+   if(halfSp < 1)
+      halfSp = 1;
+
+   double span = (double)(right - left) - 2.0 * halfSp;
+   if(span < 1.0)
+      span = 1.0;
+
+   int x = left + halfSp + (int)MathRound((double)ci / denom * span)
+           + (int)MathRound(((double)rem - 1.5) / 1.5 * halfSp);
+   return(x);
+  }
+
+//+------------------------------------------------------------------+
 //| Draw the path strip at the TOP of the chart (canvas overlay)     |
 //| X axis = candle number (left -> right), Y axis = price in pips    |
 //| Candles instead of a polyline: body = O/C, wick = H/L             |
@@ -900,15 +922,15 @@ void DrawPathCanvas()
    for(int j = 0; j < candles * 4; j += labelEvery)
      {
       int ci = j / 4;
-      int x = left + (int)MathRound((double)ci / denom * (right - left)) + (int)MathRound(((double)(j % 4) - 1.5) / 1.5 * MathMin(40.0, (double)(right - left) / denom / 2.0));
-      x = MathMax(left, MathMin(right - 1, x));   // keep the label inside the table
+      int x = PathPointX(ci, j % 4, denom, left, right);
+      // (labels are placed inside the table by PathPointX margins)
       Canvas.LineVertical(x, top, bottom, XRGB(45, 55, 70));
       Canvas.TextOut(x - 5, ch - 13, IntegerToString(j + 1), XRGB(170, 190, 210), 0);
      }
 //--- last point gridline + label
-   int jLast = candles * 4 - 1;
-   int xLast = left + (int)MathRound((double)(jLast / 4) / denom * (right - left)) + (int)MathRound(((double)(jLast % 4) - 1.5) / 1.5 * MathMin(40.0, (double)(right - left) / denom / 2.0));
-   xLast = MathMax(left, MathMin(right - 1, xLast));
+   // (last point index = candles*4 - 1, handled directly below)
+   int xLast = PathPointX(candles - 1, 3, denom, left, right);
+   // (PathPointX places the last point inside the table via margins)
    Canvas.LineVertical(xLast, top, bottom, XRGB(45, 55, 70));
    Canvas.TextOut(xLast - 7, ch - 13, IntegerToString(candles * 4), XRGB(170, 190, 210), 0);
 
@@ -978,8 +1000,8 @@ void DrawPathCanvas()
      {
       int ci = j / 4;
 
-      px[j] = left + (int)MathRound((double)ci / denom * (right - left)) + (int)MathRound(((double)(j % 4) - 1.5) / 1.5 * MathMin(40.0, (double)(right - left) / denom / 2.0));
-      px[j] = MathMax(left, MathMin(right - 1, px[j]));   // keep the first/last candle points inside the table
+      px[j] = PathPointX(ci, j % 4, denom, left, right);
+      // (PathPointX places the first/last points inside the table via margins)
       py[j] = bottom - (int)MathRound((PathArray[j].Price - pmin) / totalPrice * (bottom - top));
      }
 
