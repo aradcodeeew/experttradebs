@@ -1,5 +1,6 @@
 //+------------------------------------------------------------------+
-//|             Price Path Analyzer - Panel UI v5.0                   |
+//|             Price Path Analyzer - Panel UI v5.1                   |
+//|   v5.1: survives chart timeframe changes (state is restored)      |
 //|        Range Selection + Draggable Panel + Top Path Strip         |
 //|   X axis = candle number (left->right) | Y axis = price (pips)    |
 //|   Order: bullish O-H-L-C / bearish O-L-H-C                        |
@@ -36,6 +37,9 @@ input int   StripHeightPx   = 120;          // Top strip height (pixels)
 
 #define ALL_TF     0xFFFFFFFF
 #define NO_TF      0
+
+//--- terminal global variable that remembers which symbol this panel belongs to
+#define GV_SYM     PREFIX "GV_" + IntegerToString(ChartID()) + "_Symbol"
 
 //--- Panel geometry
 #define PN_W       204
@@ -83,20 +87,51 @@ int OnInit()
 {
    Print("[PPA-Panel] Initialization started...");
 
-   Sel.InSelection  = false;
-   Sel.StartTime    = 0;
-   Sel.EndTime      = 0;
-   Sel.HasSelection = false;
+   //--- Try to restore the previous state (selection, panel position, path
+   //    strip). This survives a chart timeframe change, because the chart
+   //    objects are kept by OnDeinit and re-read here.
+   bool restored = RestoreStateFromObjects();
 
-   PathCount = 0;
-   PathDrawn = false;
-   PathVisible = false;
-   LinesVisible = true;
+   if(!restored)
+   {
+      Sel.InSelection  = false;
+      Sel.StartTime    = 0;
+      Sel.EndTime      = 0;
+      Sel.HasSelection = false;
+
+      PathCount    = 0;
+      PathDrawn    = false;
+      PathVisible  = false;
+      LinesVisible = true;
+   }
 
    CreatePanel();
    UpdateLinesButton();
    UpdatePathButton();
-   UpdateStatus("Click chart:\n1) set START\n2) set END");
+
+   if(Sel.HasSelection)
+   {
+      //--- objects survived: re-apply the range on the current timeframe
+      DrawStartLine();
+      DrawEndLine();
+      SetLinesVisible(LinesVisible);
+      FindCandlesInRange();
+
+      if(PathDrawn && PathVisible)
+      {
+         CalculatePath();
+         DrawPathCanvas();
+      }
+
+      UpdateStatus("Range: " + TimeToString(Sel.StartTime, TIME_DATE | TIME_MINUTES) + "\n" +
+                   TimeToString(Sel.EndTime, TIME_DATE | TIME_MINUTES) + "\nCandles: " +
+                   IntegerToString(SelectedCandleCount) + (PathDrawn ? " | Points: " + IntegerToString(PathCount)
+                                                                    : " | Press Calculate"));
+   }
+   else
+   {
+      UpdateStatus("Click chart:\n1) set START\n2) set END");
+   }
 
    Print("[PPA-Panel] Ready. Select a range on chart, then press Calculate.");
 
@@ -109,9 +144,143 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    Print("[PPA-Panel] Deinitialization. Reason: ", reason);
+
+   //--- When only the timeframe (or input parameters) changed, the terminal
+   //    re-initializes the indicator. Keep the chart objects in that case so
+   //    the new instance can restore the selection / panel / path strip.
+   if(reason == REASON_CHARTCHANGE || reason == REASON_PARAMETERS)
+   {
+      ChartRedraw();
+      return;
+   }
+
+   //--- real removal / chart close / recompile / etc. -> full cleanup
    ObjectsDeleteAll(0, PREFIX);
    Canvas.Destroy();
+   GlobalVariableDel(GV_SYM);
    ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Symbol marker (detects chart symbol changes)                     |
+//+------------------------------------------------------------------+
+double SymbolHash(string s)
+{
+   double h = 0;
+   int len = StringLen(s);
+   for(int i = 0; i < len; i++)
+      h = h * 131.0 + StringGetCharacter(s, i);
+   return(h);
+}
+
+void SaveSymbolMarker()
+{
+   GlobalVariableSet(GV_SYM, SymbolHash(_Symbol));
+}
+
+bool SymbolMatchesSaved()
+{
+   if(!GlobalVariableCheck(GV_SYM))
+      return(true);
+   double h = GlobalVariableGet(GV_SYM);
+   return(MathAbs(h - SymbolHash(_Symbol)) < 0.5);
+}
+
+//+------------------------------------------------------------------+
+//| Create an object only if it does not exist yet                   |
+//+------------------------------------------------------------------+
+bool EnsureObject(string name, ENUM_OBJECT type)
+{
+   if(ObjectFind(0, name) >= 0)
+      return(true);
+   return(ObjectCreate(0, name, type, 0, 0, 0));
+}
+
+//+------------------------------------------------------------------+
+//| Restore selection / panel state from surviving chart objects     |
+//| (called from OnInit - lets the indicator survive TF changes)     |
+//+------------------------------------------------------------------+
+bool RestoreStateFromObjects()
+{
+   //--- if the chart symbol changed, old objects are meaningless
+   if(!SymbolMatchesSaved())
+   {
+      ObjectsDeleteAll(0, PREFIX);
+      Canvas.Destroy();
+      SaveSymbolMarker();
+      return(false);
+   }
+
+   bool havePanel = (ObjectFind(0, O_BG) >= 0);
+   bool haveStart = (ObjectFind(0, PREFIX "Start") >= 0);
+   bool haveEnd   = (ObjectFind(0, PREFIX "End") >= 0);
+
+   //--- nothing survived -> completely fresh start
+   if(!havePanel && !haveStart && !haveEnd)
+   {
+      SaveSymbolMarker();
+      return(false);
+   }
+
+   Sel.InSelection  = false;
+   Sel.HasSelection = false;
+
+   if(haveStart)
+   {
+      Sel.StartTime   = (datetime)ObjectGetInteger(0, PREFIX "Start", OBJPROP_TIME, 0);
+      Sel.InSelection = true;
+
+      if(haveEnd)
+      {
+         Sel.EndTime      = (datetime)ObjectGetInteger(0, PREFIX "End", OBJPROP_TIME, 0);
+         Sel.HasSelection = (Sel.EndTime > Sel.StartTime);
+         Sel.InSelection  = false;
+      }
+   }
+
+   //--- panel position
+   if(havePanel)
+   {
+      PanelX = (int)ObjectGetInteger(0, O_BG, OBJPROP_XDISTANCE);
+      PanelY = (int)ObjectGetInteger(0, O_BG, OBJPROP_YDISTANCE);
+   }
+
+   //--- line visibility (stored on the Start line object)
+   if(haveStart)
+      LinesVisible = (ObjectGetInteger(0, PREFIX "Start", OBJPROP_TIMEFRAMES) != 0);
+
+   //--- path strip state (stored on the canvas object)
+   if(Sel.HasSelection && ObjectFind(0, O_CANVAS) >= 0)
+   {
+      PathDrawn   = true;
+      PathVisible = (ObjectGetInteger(0, O_CANVAS, OBJPROP_TIMEFRAMES) != 0);
+   }
+   else
+   {
+      PathDrawn   = false;
+      PathVisible = false;
+   }
+
+   //--- snap the selection to the bars of the current timeframe
+   if(Sel.HasSelection)
+   {
+      datetime t1 = SnapToBarTime(Sel.StartTime);
+      datetime t2 = SnapToBarTime(Sel.EndTime);
+      if(t2 <= t1)
+         t2 = t1 + PeriodSeconds(_Period);
+      Sel.StartTime = t1;
+      Sel.EndTime   = t2;
+
+      if(Sel.StartTime >= Sel.EndTime)
+      {
+         Sel.HasSelection = false;
+         PathDrawn        = false;
+         PathVisible      = false;
+      }
+   }
+
+   SaveSymbolMarker();
+   return(true);
 }
 
 //+------------------------------------------------------------------+
@@ -216,9 +385,6 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
    }
 }
 
-//+------------------------------------------------------------------+
-//| Mouse click processing (no popup alerts anymore)                 |
-//+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
 //| Snap a click/drag time to the open time of the bar under it,     |
 //| so the selected range always covers whole candles (both edges).  |
@@ -352,9 +518,7 @@ void TogglePath()
       if(PathVisible)
       {
          ObjectSetInteger(0, O_CANVAS, OBJPROP_TIMEFRAMES, ALL_TF);
-
-
-   Canvas.Update(true);
+         Canvas.Update(true);
       }
       else
          ObjectSetInteger(0, O_CANVAS, OBJPROP_TIMEFRAMES, NO_TF);
@@ -488,7 +652,8 @@ void AddPathPoint(datetime time, double price, string label)
 void DrawStartLine()
 {
    string lineName = PREFIX "Start";
-   ObjectCreate(0, lineName, OBJ_VLINE, 0, Sel.StartTime, 0);
+   EnsureObject(lineName, OBJ_VLINE);
+   ObjectSetInteger(0, lineName, OBJPROP_TIME, Sel.StartTime);
    ObjectSetInteger(0, lineName, OBJPROP_COLOR, StartLineColor);
    ObjectSetInteger(0, lineName, OBJPROP_WIDTH, LineWidth);
    ObjectSetInteger(0, lineName, OBJPROP_STYLE, STYLE_SOLID);
@@ -497,7 +662,8 @@ void DrawStartLine()
    ObjectSetInteger(0, lineName, OBJPROP_TIMEFRAMES, ALL_TF);
 
    string labelName = PREFIX "StartLabel";
-   ObjectCreate(0, labelName, OBJ_TEXT, 0, Sel.StartTime, 0);
+   EnsureObject(labelName, OBJ_TEXT);
+   ObjectSetInteger(0, labelName, OBJPROP_TIME, Sel.StartTime);
    ObjectSetString(0, labelName, OBJPROP_TEXT, "START");
    ObjectSetInteger(0, labelName, OBJPROP_COLOR, StartLineColor);
    ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
@@ -508,7 +674,8 @@ void DrawStartLine()
 void DrawEndLine()
 {
    string lineName = PREFIX "End";
-   ObjectCreate(0, lineName, OBJ_VLINE, 0, Sel.EndTime, 0);
+   EnsureObject(lineName, OBJ_VLINE);
+   ObjectSetInteger(0, lineName, OBJPROP_TIME, Sel.EndTime);
    ObjectSetInteger(0, lineName, OBJPROP_COLOR, EndLineColor);
    ObjectSetInteger(0, lineName, OBJPROP_WIDTH, LineWidth);
    ObjectSetInteger(0, lineName, OBJPROP_STYLE, STYLE_SOLID);
@@ -517,7 +684,8 @@ void DrawEndLine()
    ObjectSetInteger(0, lineName, OBJPROP_TIMEFRAMES, ALL_TF);
 
    string labelName = PREFIX "EndLabel";
-   ObjectCreate(0, labelName, OBJ_TEXT, 0, Sel.EndTime, 0);
+   EnsureObject(labelName, OBJ_TEXT);
+   ObjectSetInteger(0, labelName, OBJPROP_TIME, Sel.EndTime);
    ObjectSetString(0, labelName, OBJPROP_TEXT, "END");
    ObjectSetInteger(0, labelName, OBJPROP_COLOR, EndLineColor);
    ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
@@ -624,9 +792,7 @@ void DrawPathCanvas()
    {
       Canvas.FontSet("Arial", 9, 0, 0);
       Canvas.TextOut(left, (top + bottom) / 2 - 8, "No path data in selected range", XRGB(200, 200, 200), 0);
-
-
-   Canvas.Update(true);
+      Canvas.Update(true);
       return;
    }
 
@@ -636,9 +802,6 @@ void DrawPathCanvas()
                   IntegerToString(candles) + " candles", XRGB(255, 215, 0), 0);
 
    //--- price scale (actual price, not pips)
-
-
-
 
    double pmin = PathArray[0].Price;
    double pmax = PathArray[0].Price;
@@ -748,7 +911,6 @@ void DrawPathCanvas()
    {
       int ci = j / 4;
 
-
       px[j] = left + (int)MathRound((double)ci / denom * (right - left)) + (int)MathRound(((double)(j % 4) - 1.5) / 1.5 * MathMin(40.0, (double)(right - left) / denom / 2.0));
       py[j] = bottom - (int)MathRound((PathArray[j].Price - pmin) / totalPrice * (bottom - top));
    }
@@ -767,8 +929,6 @@ void DrawPathCanvas()
 
       Canvas.FillCircle(px[j], py[j], 2, pc);
    }
-
-
 
    Canvas.Update(true);
 }
@@ -805,8 +965,13 @@ string TimeframeStr()
 //+------------------------------------------------------------------+
 void CreatePanel()
 {
-   //--- background (draggable, with border)
-   ObjectCreate(0, O_BG, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+   //--- background (draggable, with border) - reuse existing object if present
+   EnsureObject(O_BG, OBJ_RECTANGLE_LABEL);
+   if(ObjectFind(0, O_BG) >= 0)
+   {
+      PanelX = (int)ObjectGetInteger(0, O_BG, OBJPROP_XDISTANCE);
+      PanelY = (int)ObjectGetInteger(0, O_BG, OBJPROP_YDISTANCE);
+   }
    ObjectSetInteger(0, O_BG, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, O_BG, OBJPROP_XDISTANCE, PanelX);
    ObjectSetInteger(0, O_BG, OBJPROP_YDISTANCE, PanelY);
@@ -825,7 +990,7 @@ void CreatePanel()
 
    //--- children (relative offsets, moved together with panel)
    RegisterChild(O_TITLE, 10, 6);
-   ObjectCreate(0, O_TITLE, OBJ_LABEL, 0, 0, 0);
+   EnsureObject(O_TITLE, OBJ_LABEL);
    ObjectSetInteger(0, O_TITLE, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, O_TITLE, OBJPROP_XDISTANCE, PanelX + 10);
    ObjectSetInteger(0, O_TITLE, OBJPROP_YDISTANCE, PanelY + 6);
@@ -838,7 +1003,7 @@ void CreatePanel()
    ObjectSetInteger(0, O_TITLE, OBJPROP_TIMEFRAMES, ALL_TF);
 
    RegisterChild(O_STAT, 10, 24);
-   ObjectCreate(0, O_STAT, OBJ_LABEL, 0, 0, 0);
+   EnsureObject(O_STAT, OBJ_LABEL);
    ObjectSetInteger(0, O_STAT, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, O_STAT, OBJPROP_XDISTANCE, PanelX + 10);
    ObjectSetInteger(0, O_STAT, OBJPROP_YDISTANCE, PanelY + 24);
@@ -903,7 +1068,7 @@ void MovePanelChildren()
 //+------------------------------------------------------------------+
 void CreateButton(string name, int x, int y, int w, int h, string text, color bg)
 {
-   ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
+   EnsureObject(name, OBJ_BUTTON);
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
@@ -981,6 +1146,7 @@ bool IsPointOnPanel(int x, int y)
 //+------------------------------------------------------------------+
 //| Custom indicator iteration function                              |
 //+------------------------------------------------------------------+
+
 int OnCalculate(const int rates_total,
                 const int prev_calculated,
                 const datetime &time[],
