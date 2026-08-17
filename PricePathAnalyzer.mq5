@@ -766,6 +766,12 @@ void DrawPathCanvas()
    if(ch < 60)
       ch = 60;
 
+   //--- after a timeframe change the old canvas object is still on the chart
+   //    (OnDeinit keeps objects so state can be restored). Delete it first,
+   //    otherwise CreateBitmapLabel fails and the path strip disappears.
+   if(ObjectFind(0, O_CANVAS) >= 0)
+      ObjectDelete(0, O_CANVAS);
+
    if(!Canvas.CreateBitmapLabel(O_CANVAS, 0, 0, cw, ch))
    {
       Print("[PPA-Panel] Canvas creation failed, error ", GetLastError());
