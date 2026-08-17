@@ -16,7 +16,9 @@ input bool  EnableSelection = true;         // Enable click selection
 input color StartLineColor  = clrGreen;     // Start line color
 input color EndLineColor    = clrRed;       // End line color
 input int   LineWidth       = 2;            // Line width
-input color PathColor       = clrDodgerBlue;// Path color (top strip)
+input color PathColor       = clrDodgerBlue;// Doji candle color (top strip)
+input color BullColor       = clrGreen;     // Bullish candle color
+input color BearColor       = clrRed;       // Bearish candle color
 input bool  ShowInfo        = true;         // Show info text on panel
 input int   PointsPerPip    = 10;           // Points per pip (Y axis scale)
 input int   StripHeightPx   = 120;          // Top strip height (pixels)
@@ -157,7 +159,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 
       if(StringFind(objName, PREFIX "Start") == 0)
       {
-         datetime newTime = (datetime)ObjectGetInteger(0, objName, OBJPROP_TIME, 0);
+         datetime newTime = SnapToBarTime((datetime)ObjectGetInteger(0, objName, OBJPROP_TIME, 0));
          if(Sel.HasSelection && newTime >= Sel.EndTime)
          {
             ObjectSetInteger(0, objName, OBJPROP_TIME, Sel.StartTime);
@@ -172,7 +174,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 
       if(StringFind(objName, PREFIX "End") == 0)
       {
-         datetime newTime = (datetime)ObjectGetInteger(0, objName, OBJPROP_TIME, 0);
+         datetime newTime = SnapToBarTime((datetime)ObjectGetInteger(0, objName, OBJPROP_TIME, 0));
          if(Sel.HasSelection && newTime <= Sel.StartTime)
          {
             ObjectSetInteger(0, objName, OBJPROP_TIME, Sel.EndTime);
@@ -217,10 +219,36 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 //+------------------------------------------------------------------+
 //| Mouse click processing (no popup alerts anymore)                 |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Snap a click/drag time to the open time of the bar under it,     |
+//| so the selected range always covers whole candles (both edges).  |
+//+------------------------------------------------------------------+
+datetime SnapToBarTime(datetime t)
+{
+   int bars = iBars(_Symbol, _Period);
+   if(bars <= 0)
+      return(t);
+
+   int idx = iBarShift(_Symbol, _Period, t, false);
+   if(idx < 0 || idx >= bars)
+      return(t);
+
+   datetime bt = iTime(_Symbol, _Period, idx);
+   if(bt <= 0)
+      return(t);
+
+   return(bt);
+}
+
+//+------------------------------------------------------------------+
+//| Mouse click processing (no popup alerts anymore)                 |
+//+------------------------------------------------------------------+
 void OnMouseClick(datetime clickTime)
 {
    if(!EnableSelection)
       return;
+
+   clickTime = SnapToBarTime(clickTime);
 
    if(!Sel.InSelection)
    {
@@ -324,7 +352,9 @@ void TogglePath()
       if(PathVisible)
       {
          ObjectSetInteger(0, O_CANVAS, OBJPROP_TIMEFRAMES, ALL_TF);
-         Canvas.Update(true);
+
+
+   Canvas.Update(true);
       }
       else
          ObjectSetInteger(0, O_CANVAS, OBJPROP_TIMEFRAMES, NO_TF);
@@ -366,7 +396,7 @@ void FindCandlesInRange()
    int bars = iBars(_Symbol, _Period);
    SelectedCandleCount = 0;
 
-   for(int i = 0; i < bars; i++)
+   for(int i = bars - 1; i >= 0; i--)
    {
       datetime barTime = iTime(_Symbol, _Period, i);
       if(barTime >= Sel.StartTime && barTime <= Sel.EndTime)
@@ -376,9 +406,9 @@ void FindCandlesInRange()
 
 //+------------------------------------------------------------------+
 //| Calculate path points                                            |
-//| Section direction decides point order inside every candle:       |
-//|   bullish (END close > START close) -> O, H, L, C                |
-//|   bearish (END close < START close) -> O, L, H, C                |
+//| Point order is always: O -> H -> L -> C for every candle       |
+//|   (direction is not used; price shows it visually)                |
+//|   order is the same for every candle                |
 //+------------------------------------------------------------------+
 void CalculatePath()
 {
@@ -387,36 +417,41 @@ void CalculatePath()
 
    int bars = iBars(_Symbol, _Period);
 
-   //--- section direction: close(END click) vs close(START click)
+   /* --- direction logic removed: order is always O -> H -> L -> C ---
    bool IsBullish = true;
    bool found = false;
    double closeEnd   = 0;
    double closeStart = 0;
 
-   for(int i = 0; i < bars; i++)
+   for(int i = bars - 1; i >= 0; i--)
    {
       datetime bt = iTime(_Symbol, _Period, i);
       if(bt < Sel.StartTime || bt > Sel.EndTime)
          continue;
       if(!found)
       {
-         closeEnd = iClose(_Symbol, _Period, i);
+         closeStart = iClose(_Symbol, _Period, i);
          found = true;
       }
-      closeStart = iClose(_Symbol, _Period, i);
+      closeEnd = iClose(_Symbol, _Period, i);
    }
 
    if(found)
       IsBullish = (closeEnd >= closeStart);
 
+   */
+
    //--- build the path
-   for(int i = 0; i < bars; i++)
+   for(int i = bars - 1; i >= 0; i--)
    {
       datetime bt = iTime(_Symbol, _Period, i);
       if(bt < Sel.StartTime || bt > Sel.EndTime)
          continue;
 
       AddPathPoint(bt, iOpen(_Symbol, _Period, i), "O");
+      AddPathPoint(bt, iHigh(_Symbol, _Period, i), "H");
+      AddPathPoint(bt, iLow(_Symbol, _Period, i), "L");
+      /* --- old direction-based order (O,L,H,C for bearish) disabled ---
 
       if(IsBullish)
       {
@@ -428,6 +463,8 @@ void CalculatePath()
          AddPathPoint(bt, iLow(_Symbol, _Period, i), "L");
          AddPathPoint(bt, iHigh(_Symbol, _Period, i), "H");
       }
+
+      */
 
       AddPathPoint(bt, iClose(_Symbol, _Period, i), "C");
    }
@@ -531,8 +568,19 @@ void DeleteLineObjects()
 }
 
 //+------------------------------------------------------------------+
+//| Convert a price to a Y pixel inside the strip     |
+//| (price is measured in pips from the lowest low of the range)    |
+//+------------------------------------------------------------------+
+int PipToY(double price, double pmin, double pip, double totalPips, int bottom, int top)
+{
+   double pips = (price - pmin) / pip;
+   return(bottom - (int)MathRound(pips / totalPips * (bottom - top)));
+}
+
+//+------------------------------------------------------------------+
 //| Draw the path strip at the TOP of the chart (canvas overlay)     |
 //| X axis = candle number (left -> right), Y axis = price in pips    |
+//| Candles instead of a polyline: body = O/C, wick = H/L             |
 //+------------------------------------------------------------------+
 void DrawPathCanvas()
 {
@@ -566,7 +614,7 @@ void DrawPathCanvas()
    Canvas.Rectangle(1, 1, cw - 2, ch - 2, XRGB(70, 90, 120));
 
    //--- plot area
-   int left   = 30;      // space for pip labels (Y axis)
+   int left   = 30;      // space for price labels (Y axis)
    int right  = cw - 8;
    int top    = 20;      // below the title
    int bottom = ch - 14; // space for candle-number labels (X axis)
@@ -576,19 +624,21 @@ void DrawPathCanvas()
    {
       Canvas.FontSet("Arial", 9, 0, 0);
       Canvas.TextOut(left, (top + bottom) / 2 - 8, "No path data in selected range", XRGB(200, 200, 200), 0);
-      Canvas.Update(true);
+
+
+   Canvas.Update(true);
       return;
    }
 
    //--- title
    Canvas.FontSet("Arial", 9, 0, 0);
-   Canvas.TextOut(8, 3, "PRICE PATH (PIPS)  |  " + _Symbol + " " + TimeframeStr() + "  |  " +
+   Canvas.TextOut(8, 3, "PRICE PATH (PRICE)  |  " + _Symbol + " " + TimeframeStr() + "  |  " +
                   IntegerToString(candles) + " candles", XRGB(255, 215, 0), 0);
 
-   //--- pip scale
-   double pip = _Point * PointsPerPip;
-   if(pip <= 0)
-      pip = _Point * 10;
+   //--- price scale (actual price, not pips)
+
+
+
 
    double pmin = PathArray[0].Price;
    double pmax = PathArray[0].Price;
@@ -598,11 +648,17 @@ void DrawPathCanvas()
       if(PathArray[i].Price > pmax) pmax = PathArray[i].Price;
    }
 
-   double totalPips = (pmax - pmin) / pip;
-   if(totalPips < 1)
-      totalPips = 1;
-   double step = NiceStep(totalPips / 5.0);
-   int dec = (step < 1 ? 1 : 0);
+   double totalPrice = pmax - pmin;
+   if(totalPrice <= 0)
+      totalPrice = _Point * 10;
+   double step = NiceStep(totalPrice / 5.0);
+   int dec = 0;
+   double sd = step;
+   while(sd < 1 && dec < 8)
+   {
+      sd *= 10;
+      dec++;
+   }
 
    int denom = (candles > 1 ? candles - 1 : 1);
 
@@ -626,17 +682,63 @@ void DrawPathCanvas()
    Canvas.LineVertical(xLast, top, bottom, XRGB(45, 55, 70));
    Canvas.TextOut(xLast - 7, ch - 13, IntegerToString(candles), XRGB(170, 190, 210), 0);
 
-   //--- Y axis (left): pip labels, bottom -> top
-   int nGrid = (int)MathFloor(totalPips / step);
+   //--- Y axis (left): price labels, bottom -> top
+   int nGrid = (int)MathFloor(totalPrice / step);
    for(int g = 0; g <= nGrid; g++)
    {
-      double pips = g * step;
-      int y = bottom - (int)MathRound(pips / totalPips * (bottom - top));
+      double price = pmin + g * step;
+      int y = bottom - (int)MathRound((price - pmin) / totalPrice * (bottom - top));
       Canvas.LineHorizontal(left, right, y, XRGB(45, 55, 70));
-      Canvas.TextOut(2, y - 4, DoubleToString(pips, dec), XRGB(170, 190, 210), 0);
+      Canvas.TextOut(2, y - 4, DoubleToString(price, dec), XRGB(170, 190, 210), 0);
    }
 
-   //--- map path: X = candle column, Y = price in pips
+   /* ---- candle-body drawing disabled (4-point polyline used instead) ----
+   //--- draw candles: X = candle column (number), Y = price in pips
+   int bodyHalf = (int)MathMax(2, MathMin(20, (double)(right - left) / denom / 3.0));
+
+   for(int j = 0; j + 3 < PathCount; j += 4)
+   {
+      int ci = j / 4;
+
+      //--- read O/H/L/C from the 4 points of this candle
+      double oc = 0, hh = 0, ll = 0, cc = 0;
+      for(int k = 0; k < 4; k++)
+      {
+         double pr = PathArray[j + k].Price;
+         if(PathArray[j + k].Label == "O") oc = pr;
+         else if(PathArray[j + k].Label == "H") hh = pr;
+         else if(PathArray[j + k].Label == "L") ll = pr;
+         else if(PathArray[j + k].Label == "C") cc = pr;
+      }
+
+      int x  = left + (int)MathRound((double)ci / denom * (right - left));
+      int yo = PipToY(oc, pmin, pip, totalPips, bottom, top);
+      int yh = PipToY(hh, pmin, pip, totalPips, bottom, top);
+      int yl = PipToY(ll, pmin, pip, totalPips, bottom, top);
+      int yc = PipToY(cc, pmin, pip, totalPips, bottom, top);
+
+      //--- color: bullish = close>=open, bearish = close<open, doji = path color
+      uint col;
+      if(cc > oc)      col = COLOR2RGB(BullColor);
+      else if(cc < oc) col = COLOR2RGB(BearColor);
+      else             col = COLOR2RGB(PathColor);
+
+      //--- wick (high -> low)
+      Canvas.LineVertical(x, yh, yl, col);
+
+      //--- body (open -> close), min 1px so a doji stays visible
+      int bodyTop = MathMin(yo, yc);
+      int bodyH   = MathMax(MathAbs(yo - yc), 1);
+      Canvas.FillRectangle(x - bodyHalf, bodyTop, x + bodyHalf, bodyTop + bodyH - 1, col);
+
+      //--- thin dark outline for contrast
+      if(bodyH >= 3)
+         Canvas.Rectangle(x - bodyHalf, bodyTop, x + bodyHalf, bodyTop + bodyH - 1, XRGB(12, 14, 18));
+   }
+
+   */
+
+   //--- map path: X = candle column, Y = actual price
    int px[];
    int py[];
    ArrayResize(px, PathCount);
@@ -645,10 +747,10 @@ void DrawPathCanvas()
    for(int j = 0; j < PathCount; j++)
    {
       int ci = j / 4;
-      double pips = (PathArray[j].Price - pmin) / pip;
+
 
       px[j] = left + (int)MathRound((double)ci / denom * (right - left)) + (int)MathRound(((double)(j % 4) - 1.5) / 1.5 * MathMin(40.0, (double)(right - left) / denom / 2.0));
-      py[j] = bottom - (int)MathRound(pips / totalPips * (bottom - top));
+      py[j] = bottom - (int)MathRound((PathArray[j].Price - pmin) / totalPrice * (bottom - top));
    }
 
    //--- blue path line
@@ -665,6 +767,8 @@ void DrawPathCanvas()
 
       Canvas.FillCircle(px[j], py[j], 2, pc);
    }
+
+
 
    Canvas.Update(true);
 }
