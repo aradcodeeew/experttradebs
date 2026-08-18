@@ -3,7 +3,7 @@
 //|   v5.1: survives chart timeframe changes (state is restored)      |
 //|        Range Selection + Draggable Panel + Top Path Strip         |
 //|   X axis = candle number (left->right) | Y axis = price (pips)    |
-//|   Order: bullish O-H-L-C / bearish O-L-H-C                        |
+//|   Order: bullish O-L-H-C / bearish O-H-L-C                        |
 //|                    For MetaTrader 5 (Analysis Only)               |
 //+------------------------------------------------------------------+
 #property strict
@@ -38,10 +38,10 @@ input color HighColor   = clrRed;           // Color of HIGH points (red)
 input color LowColor    = clrBlue;          // Color of LOW points (blue)
 input color CloseColor  = clrYellow;        // Color of CLOSE points (yellow)
 
-//--- connect the 4 points (O/H/L/C) of the FIRST selected candle with a line
-input bool  ConnectFirstCandle = true;      // Connect first candle 4 points
+//--- connect the 4 points (O/H/L/C) of every selected candle with a line
+input bool  ConnectCandles  = true;         // Connect each candle's 4 points
 input color ConnectLineColor   = clrMagenta;// Color of the connecting line
-input int   ConnectLineWidth   = 2;         // Width of the connecting line
+
 
 //--- Object names
 #define PREFIX     "PPA_"
@@ -617,9 +617,9 @@ void FindCandlesInRange()
 
 //+------------------------------------------------------------------+
 //| Calculate path points                                            |
-//| Point order is always: O -> H -> L -> C for every candle       |
-//|   (direction is not used; price shows it visually)                |
-//|   order is the same for every candle                |
+//| Point order on X axis depends on candle direction       |
+//|   bullish: O -> L -> H -> C | bearish: O -> H -> L -> C                |
+//|   each point keeps its own price                |
 //+------------------------------------------------------------------+
 void CalculatePath()
   {
@@ -659,9 +659,10 @@ void CalculatePath()
       if(bt < Sel.StartTime || bt > Sel.EndTime)
          continue;
 
-      AddPathPoint(bt, iOpen(_Symbol, _Period, i), "O");
-      AddPathPoint(bt, iHigh(_Symbol, _Period, i), "H");
-      AddPathPoint(bt, iLow(_Symbol, _Period, i), "L");
+      double o = iOpen(_Symbol, _Period, i);
+      double h = iHigh(_Symbol, _Period, i);
+      double l = iLow(_Symbol, _Period, i);
+      double c = iClose(_Symbol, _Period, i);
       /* --- old direction-based order (O,L,H,C for bearish) disabled ---
 
       if(IsBullish)
@@ -677,7 +678,24 @@ void CalculatePath()
 
       */
 
-      AddPathPoint(bt, iClose(_Symbol, _Period, i), "C");
+      //--- X order depends on candle direction:
+      //    bullish: O -> L -> H -> C | bearish: O -> H -> L -> C
+      if(c >= o)
+        {
+         //--- bullish: points on X axis in order O, L, H, C
+         AddPathPoint(bt, o, "O");
+         AddPathPoint(bt, l, "L");
+         AddPathPoint(bt, h, "H");
+         AddPathPoint(bt, c, "C");
+        }
+      else
+        {
+         //--- bearish: points on X axis in order O, H, L, C
+         AddPathPoint(bt, o, "O");
+         AddPathPoint(bt, h, "H");
+         AddPathPoint(bt, l, "L");
+         AddPathPoint(bt, c, "C");
+        }
      }
   }
 
@@ -915,7 +933,7 @@ void DrawPathCanvas()
    int denom = (candles > 1 ? candles - 1 : 1);
 
 //--- X axis (bottom): one number per point, left to right
-//    candle 1: O=1 H=2 L=3 C=4, candle 2: O=5 H=6 L=7 C=8, ...
+//    candle 1: O=1 L=2 H=3 C=4 (bull) / O=1 H=2 L=3 C=4 (bear), ...
    int labelEvery = 1;
    int maxXLabels = (right - left) / 22;
    if(maxXLabels < 1)
@@ -1032,14 +1050,21 @@ void DrawPathCanvas()
       Canvas.FillCircle(px[j], py[j], 2, pc);
      }
 
-//--- connect the 4 points (O -> H -> L -> C) of the FIRST selected candle
-   if(ConnectFirstCandle && candles >= 1 && PathCount >= 4)
+//--- connect the 4 points of every candle (directional order)
+   if(ConnectCandles && candles >= 1 && PathCount >= 4)
      {
       uint lc = COLOR2RGB(ConnectLineColor);
 
-      // first candle points are j = 0,1,2,3  (O,H,L,C)
-      for(int seg = 0; seg < 3; seg++)
-         Canvas.Line(px[seg], py[seg], px[seg + 1], py[seg + 1], lc);
+      // connect this candle's 4 points in directional order
+      for(int c = 0; c < candles; c++)
+        {
+         int b = c * 4;   // points already stored in X order (see CalculatePath)
+         // connect the 4 points in their stored order
+         for(int s = 0; s < 3; s++)
+            Canvas.Line(px[b + s], py[b + s], px[b + s + 1], py[b + s + 1], lc);
+        }
+
+
      }
 
    Canvas.Update(true);
@@ -1352,5 +1377,5 @@ int FindOwnSubwindow()
   }
 
 //+------------------------------------------------------------------+
-//| End of Indicator                                                  |
+//| End of spikedetector                                             |
 //+------------------------------------------------------------------+
