@@ -87,6 +87,16 @@ struct PathPoint
 PathPoint PathArray[];
 int PathCount = 0;
 
+//--- Candle classification (Spike / Trend / Doji) - one entry per selected candle
+//    Body   = |Close - Open|
+//    bullish (Close>=Open): ShadowUp = High-Close , ShadowDown = Open-Low
+//    bearish (Close<Open) : ShadowUp = High-Open  , ShadowDown = Close-Low
+string CandleClass[];
+int    CandleClassCount = 0;
+
+//--- minimum shadow/body ratio (percentage) that turns a candle into "Trend"
+#define TREND_SHADOW_RATIO   0.20   // 20%
+
 //--- Panel / strip state
 int  PanelX = 20;
 int  PanelY = 110;
@@ -616,6 +626,52 @@ void FindCandlesInRange()
   }
 
 //+------------------------------------------------------------------+
+//| Classify a candle as Spike / Trend / Doji                        |
+//|   Body      = |Close - Open|                                     |
+//|   bullish (Close>=Open): ShadowUp = High-Close , ShadowDown = Open-Low |
+//|   bearish (Close<Open) : ShadowUp = High-Open  , ShadowDown = Close-Low |
+//|                                                                    |
+//|   Body==0 (or both shadows==0 while Body>0) -> "Spike"           |
+//|   any shadow >= TREND_SHADOW_RATIO * Body   -> "Trend"           |
+//|   otherwise                                 -> "Doji"            |
+//+------------------------------------------------------------------+
+string ClassifyCandle(double o, double h, double l, double c)
+  {
+   double body = MathAbs(c - o);
+   double shadowUp, shadowDown;
+
+   if(c >= o) // bullish
+     {
+      shadowUp   = h - c;
+      shadowDown = o - l;
+     }
+   else       // bearish
+     {
+      shadowUp   = h - o;
+      shadowDown = c - l;
+     }
+
+   if(shadowUp < 0)
+      shadowUp = 0;
+   if(shadowDown < 0)
+      shadowDown = 0;
+
+   if(body <= 0)
+      return("Doji");
+
+   if(shadowUp <= 0 && shadowDown <= 0)
+      return("Spike");
+
+   double ratioUp   = shadowUp   / body;
+   double ratioDown = shadowDown / body;
+
+   if(ratioUp >= TREND_SHADOW_RATIO || ratioDown >= TREND_SHADOW_RATIO)
+      return("Trend");
+
+   return("Doji");
+  }
+
+//+------------------------------------------------------------------+
 //| Calculate path points                                            |
 //| Point order on X axis depends on candle direction       |
 //|   bullish: O -> L -> H -> C | bearish: O -> H -> L -> C                |
@@ -625,6 +681,9 @@ void CalculatePath()
   {
    ArrayResize(PathArray, 0);
    PathCount = 0;
+
+   ArrayResize(CandleClass, 0);
+   CandleClassCount = 0;
 
    int bars = iBars(_Symbol, _Period);
 
@@ -663,6 +722,12 @@ void CalculatePath()
       double h = iHigh(_Symbol, _Period, i);
       double l = iLow(_Symbol, _Period, i);
       double c = iClose(_Symbol, _Period, i);
+
+      //--- classify this candle (Spike / Trend / Doji) and store it,
+      //    in the same left-to-right order the candles are added below
+      ArrayResize(CandleClass, CandleClassCount + 1);
+      CandleClass[CandleClassCount] = ClassifyCandle(o, h, l, c);
+      CandleClassCount++;
       /* --- old direction-based order (O,L,H,C for bearish) disabled ---
 
       if(IsBullish)
@@ -887,10 +952,11 @@ void DrawPathCanvas()
    Canvas.Rectangle(1, 1, cw - 2, ch - 2, XRGB(70, 90, 120));
 
 //--- plot area
-   int left   = 30;      // space for price labels (Y axis)
-   int right  = cw - 8;
-   int top    = 20;      // below the title
-   int bottom = ch - 14; // space for candle-number labels (X axis)
+   int left     = 30;      // space for price labels (Y axis)
+   int right    = cw - 8;
+   int classRowY = 15;     // row for the Spike/Trend/Doji boxes (below title)
+   int top      = 32;      // below the title + classification row
+   int bottom   = ch - 14; // space for candle-number labels (X axis)
 
    int candles = PathCount / 4;
    if(candles <= 0 || PathCount < 4)
@@ -931,6 +997,38 @@ void DrawPathCanvas()
      }
 
    int denom = (candles > 1 ? candles - 1 : 1);
+
+//--- Spike / Trend / Doji classification boxes (one per candle, top row)
+   Canvas.FontSet("Arial", 7, 0, 0);
+   for(int ci = 0; ci < candles; ci++)
+     {
+      if(ci >= CandleClassCount)
+         break;
+
+      string cls = CandleClass[ci];
+
+      uint boxColor;
+      if(cls == "Spike")
+         boxColor = XRGB(190, 60, 60);   // red-ish
+      else
+         if(cls == "Trend")
+            boxColor = XRGB(50, 150, 90);   // green-ish
+         else
+            boxColor = XRGB(100, 100, 110); // gray (Doji)
+
+      //--- center the box on this candle's 4 points
+      int xStart = PathPointX(ci, 0, denom, left, right);
+      int xEnd   = PathPointX(ci, 3, denom, left, right);
+      int cx     = (xStart + xEnd) / 2;
+
+      int boxHalfW = 16;
+      int boxTop   = classRowY;
+      int boxBot   = classRowY + 10;
+
+      Canvas.FillRectangle(cx - boxHalfW, boxTop, cx + boxHalfW, boxBot, boxColor);
+      Canvas.Rectangle(cx - boxHalfW, boxTop, cx + boxHalfW, boxBot, XRGB(15, 17, 20));
+      Canvas.TextOut(cx - boxHalfW + 2, boxTop + 1, cls, XRGB(255, 255, 255), 0);
+     }
 
 //--- X axis (bottom): one number per point, left to right
 //    candle 1: O=1 L=2 H=3 C=4 (bull) / O=1 H=2 L=3 C=4 (bear), ...
@@ -1377,5 +1475,5 @@ int FindOwnSubwindow()
   }
 
 //+------------------------------------------------------------------+
-//| End of spikedetector                                             |
+//| End of spikedetector   arad azadbakht                                          |
 //+------------------------------------------------------------------+
