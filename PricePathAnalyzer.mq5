@@ -38,6 +38,11 @@ input color HighColor   = clrRed;           // Color of HIGH points (red)
 input color LowColor    = clrBlue;          // Color of LOW points (blue)
 input color CloseColor  = clrYellow;        // Color of CLOSE points (yellow)
 
+//--- connect the 4 points (O/H/L/C) of the FIRST selected candle with a line
+input bool  ConnectFirstCandle = true;      // Connect first candle 4 points
+input color ConnectLineColor   = clrMagenta;// Color of the connecting line
+input int   ConnectLineWidth   = 2;         // Width of the connecting line
+
 //--- Object names
 #define PREFIX     "PPA_"
 #define O_BG       PREFIX "Panel_BG"
@@ -928,9 +933,9 @@ void DrawPathCanvas()
       Canvas.TextOut(x - 5, ch - 13, IntegerToString(j + 1), XRGB(170, 190, 210), 0);
      }
 //--- last point gridline + label
-   // (last point index = candles*4 - 1, handled directly below)
+// (last point index = candles*4 - 1, handled directly below)
    int xLast = PathPointX(candles - 1, 3, denom, left, right);
-   // (PathPointX places the last point inside the table via margins)
+// (PathPointX places the last point inside the table via margins)
    Canvas.LineVertical(xLast, top, bottom, XRGB(45, 55, 70));
    Canvas.TextOut(xLast - 7, ch - 13, IntegerToString(candles * 4), XRGB(170, 190, 210), 0);
 
@@ -1006,7 +1011,7 @@ void DrawPathCanvas()
      }
 
 //--- blue path line
-   //--- no connecting line: every point stays at its own position
+//--- no connecting line: every point stays at its own position
 
 //--- colored points (O/H/L/C)
    for(int j = 0; j < PathCount; j++)
@@ -1025,6 +1030,16 @@ void DrawPathCanvas()
                   pc = COLOR2RGB(CloseColor);
 
       Canvas.FillCircle(px[j], py[j], 2, pc);
+     }
+
+//--- connect the 4 points (O -> H -> L -> C) of the FIRST selected candle
+   if(ConnectFirstCandle && candles >= 1 && PathCount >= 4)
+     {
+      uint lc = COLOR2RGB(ConnectLineColor);
+
+      // first candle points are j = 0,1,2,3  (O,H,L,C)
+      for(int seg = 0; seg < 3; seg++)
+         Canvas.Line(px[seg], py[seg], px[seg + 1], py[seg + 1], lc);
      }
 
    Canvas.Update(true);
