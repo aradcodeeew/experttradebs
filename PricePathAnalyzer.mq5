@@ -1,6 +1,7 @@
 //+------------------------------------------------------------------+
 //|             Price Path Analyzer - Panel UI v5.1                   |
 //|   v5.1: survives chart timeframe changes (state is restored)      |
+//|   v5.2: T-Line projection (cx/cy/n/t) added                      |
 //|        Range Selection + Draggable Panel + Top Path Strip         |
 //|   X axis = candle number (left->right) | Y axis = price (pips)    |
 //|   Order: bullish O-L-H-C / bearish O-H-L-C                        |
@@ -31,6 +32,9 @@ input color BearColor       = clrRed;       // Bearish candle color
 input bool  ShowInfo        = true;         // Show info text on panel
 input int   PointsPerPip    = 10;           // Points per pip (Y axis scale)
 input int   StripHeightPx   = 120;          // Top strip height (pixels)
+input int   TableFontSize   = 9;            // Table font size (X/Y labels)
+input int   ClassFontSize   = 10;           // Spike/Trend/Doji font size
+input double TrendShadowRatio = 0.25;      // Shadow/body ratio: above = Trend, below = Spike
 
 //--- point colors (each candle shows 4 points: O / H / L / C)
 input color OpenColor   = clrGreen;         // Color of OPEN points (green)
@@ -41,6 +45,19 @@ input color CloseColor  = clrYellow;        // Color of CLOSE points (yellow)
 //--- connect the 4 points (O/H/L/C) of every selected candle with a line
 input bool  ConnectCandles  = true;         // Connect each candle's 4 points
 input color ConnectLineColor   = clrMagenta;// Color of the connecting line
+
+//--- T-Line: cx/cy/n/t projection (horizontal line at cx price)
+input bool            EnableTLine    = true;        // Enable cx/cy/n/t projection
+input color           TLineColor     = clrAqua;     // T-line color
+input ENUM_LINE_STYLE TLineStyle     = STYLE_DOT;   // T-line style
+input int             TLineThick     = 2;           // T-line thickness (px)
+input int             TLineCandleWidth = 5;         // T-line width (candles)
+input bool            TLineBullStart = true;        // cx candle must be bullish (O<C)
+input bool            TLineBearEnd   = true;        // cy candle must be bearish (O>C)
+input bool            TLineInclusive = false;       // n includes cx & cy (distance+1)
+input int             TLineSpikeFilter = 1;         // Draw only if this many Spike candles in range (0=off)
+input bool            TLineShowLabel = true;        // Show "T" label on the line
+input color           TLineLabelColor = clrYellow;  // T label color
 
 
 //--- Object names
@@ -94,8 +111,8 @@ int PathCount = 0;
 string CandleClass[];
 int    CandleClassCount = 0;
 
-//--- minimum shadow/body ratio (percentage) that turns a candle into "Trend"
-#define TREND_SHADOW_RATIO   0.20   // 20%
+//--- shadow/body ratio threshold for "Trend" (input TrendShadowRatio, default 25%)
+//
 
 //--- Panel / strip state
 int  PanelX = 20;
@@ -113,6 +130,19 @@ int    MySubwindow = 1;
 string PanelChildNames[8];
 int    PanelChildOffX[8];
 int    PanelChildOffY[8];
+
+//--- T-Line (cx/cy/n/t) projection state
+int    TLineStartBar = -1;
+int    TLineEndBar   = -1;
+double TLineCx       = 0;
+double TLineCy       = 0;
+double TLineN        = 0;
+double TLineT        = 0;
+bool   TLineBullDirection = true;
+
+   // (TInfo cleanup is inside ResetProjectionState())
+bool   TLineDrawn    = false;
+string TLineWaitReason = "";
 
 //+------------------------------------------------------------------+
 //| Custom indicator initialization function                         |
@@ -149,6 +179,8 @@ int OnInit()
       LinesVisible = true;
      }
 
+   UpdateProjection();
+
    CreatePanel();
    UpdateLinesButton();
    UpdatePathButton();
@@ -160,10 +192,12 @@ int OnInit()
       DrawEndLine();
       SetLinesVisible(LinesVisible);
       FindCandlesInRange();
+   UpdateProjection();
 
       if(PathDrawn && PathVisible)
         {
-         CalculatePath();
+         UpdateProjection();
+   CalculatePath();
          DrawPathCanvas();
         }
 
@@ -501,6 +535,7 @@ void OnMouseClick(datetime clickTime)
       UpdateStatus("Range: " + TimeToString(Sel.StartTime, TIME_DATE | TIME_MINUTES) + "\n" +
                    TimeToString(Sel.EndTime, TIME_DATE | TIME_MINUTES) + "\nCandles: " +
                    IntegerToString(SelectedCandleCount) + " | Press Calculate");
+      UpdateProjection();
       Print("[PPA-Panel] End selected: ", TimeToString(Sel.EndTime));
      }
   }
@@ -591,6 +626,7 @@ void TogglePath()
 void ClearAll()
   {
    DeleteLineObjects();
+   ResetProjectionState();
    Sel.InSelection      = false;
    Sel.HasSelection     = false;
    Sel.StartTime        = 0;
@@ -631,9 +667,9 @@ void FindCandlesInRange()
 //|   bullish (Close>=Open): ShadowUp = High-Close , ShadowDown = Open-Low |
 //|   bearish (Close<Open) : ShadowUp = High-Open  , ShadowDown = Close-Low |
 //|                                                                    |
-//|   Body==0 (or both shadows==0 while Body>0) -> "Spike"           |
-//|   any shadow >= TREND_SHADOW_RATIO * Body   -> "Trend"           |
-//|   otherwise                                 -> "Doji"            |
+//|   Body==0 -> "Doji" | shadows below threshold -> "Spike"           |
+//|   any shadow >= TrendShadowRatio * Body -> "Trend"           |
+//|   otherwise                                 -> "Spike"            |
 //+------------------------------------------------------------------+
 string ClassifyCandle(double o, double h, double l, double c)
   {
@@ -665,10 +701,10 @@ string ClassifyCandle(double o, double h, double l, double c)
    double ratioUp   = shadowUp   / body;
    double ratioDown = shadowDown / body;
 
-   if(ratioUp >= TREND_SHADOW_RATIO || ratioDown >= TREND_SHADOW_RATIO)
+   if(ratioUp >= TrendShadowRatio || ratioDown >= TrendShadowRatio)
       return("Trend");
 
-   return("Doji");
+   return("Spike");
   }
 
 //+------------------------------------------------------------------+
@@ -774,6 +810,265 @@ void AddPathPoint(datetime time, double price, string label)
    PathArray[PathCount].Price = price;
    PathArray[PathCount].Label = label;
    PathCount++;
+  }
+
+//+------------------------------------------------------------------+
+//| Draw the vertical selection lines                                |
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| T-Line (cx/cy/n/t) projection                                   |
+//|                                                                  |
+//| Definition requested for this version:                          |
+//|   cx = OPEN of the FIRST candle under the green START line.     |
+//|   direction = overall direction of the selected piece, measured  |
+//|              from the first selected candle OPEN to the last    |
+//|              selected candle close.                              |
+//|   cy = close of the FIRST candle, scanning left -> right, whose  |
+//|        direction is opposite to the selected piece.              |
+//|   n  = ABS(cy - cx), i.e. the price distance from cx to cy.      |
+//|   t  = cy + n  for a bullish selected piece,                     |
+//|        t  = cy - n  for a bearish selected piece.                |
+//|                                                                  |
+//| The result t is a PRICE level. A finite horizontal segment is    |
+//| drawn on the main chart at that exact price, beginning around    |
+//| the cy candle. No projection-by-bar-index is used here.          |
+//+------------------------------------------------------------------+
+void DeleteProjectionObjects()
+  {
+   ObjectDelete(0, PREFIX "TLine");
+   ObjectDelete(0, PREFIX "TLabel");
+   ObjectDelete(0, PREFIX "TInfo");
+   TLineDrawn = false;
+  }
+
+//+------------------------------------------------------------------+
+//| Reset T-line state                                               |
+//+------------------------------------------------------------------+
+void ResetProjectionState()
+  {
+   DeleteProjectionObjects();
+   TLineWaitReason = "";
+   TLineStartBar = -1;
+   TLineEndBar   = -1;
+   TLineCx       = 0;
+   TLineCy       = 0;
+   TLineN        = 0;
+   TLineT        = 0;
+   TLineBullDirection = true;
+  }
+
+//+------------------------------------------------------------------+
+//| Draw the finite horizontal T price segment on the MAIN chart.    |
+//| The segment is centered on the first opposite candle (cy).       |
+//+------------------------------------------------------------------+
+void DrawTLineAt(int cyBarIdx, double price)
+  {
+   string objName = PREFIX "TLine";
+   ObjectDelete(0, objName);
+
+   datetime cyTime = iTime(_Symbol, _Period, cyBarIdx);
+   if(cyTime <= 0)
+      return;
+
+   int width = MathMax(1, TLineCandleWidth);
+   long step = (long)PeriodSeconds(_Period);
+   if(step <= 0)
+      step = 60;
+
+   int leftBars  = width / 2;
+   int rightBars = width - leftBars;
+   datetime t1 = (datetime)((long)cyTime - step * leftBars);
+   datetime t2 = (datetime)((long)cyTime + step * rightBars);
+
+   if(!ObjectCreate(0, objName, OBJ_TREND, 0, t1, price, t2, price))
+     {
+      Print("[PPA-TLine] ObjectCreate failed. Error=", GetLastError());
+      return;
+     }
+
+   ObjectSetInteger(0, objName, OBJPROP_RAY,        false);
+   ObjectSetInteger(0, objName, OBJPROP_COLOR,      TLineColor);
+   ObjectSetInteger(0, objName, OBJPROP_STYLE,      TLineStyle);
+   ObjectSetInteger(0, objName, OBJPROP_WIDTH,      MathMax(1, TLineThick));
+   ObjectSetInteger(0, objName, OBJPROP_BACK,       false);
+   ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, objName, OBJPROP_HIDDEN,     true);
+   ObjectSetInteger(0, objName, OBJPROP_TIMEFRAMES, ALL_TF);
+
+   if(TLineShowLabel)
+     {
+      string lblName = PREFIX "TLabel";
+      ObjectDelete(0, lblName);
+      if(ObjectCreate(0, lblName, OBJ_TEXT, 0, t2, price))
+        {
+         ObjectSetString(0, lblName, OBJPROP_TEXT, "T");
+         ObjectSetInteger(0, lblName, OBJPROP_COLOR, TLineLabelColor);
+         ObjectSetInteger(0, lblName, OBJPROP_FONTSIZE, 10);
+         ObjectSetInteger(0, lblName, OBJPROP_ANCHOR, ANCHOR_LEFT);
+         ObjectSetInteger(0, lblName, OBJPROP_SELECTABLE, false);
+         ObjectSetInteger(0, lblName, OBJPROP_HIDDEN, true);
+         ObjectSetInteger(0, lblName, OBJPROP_TIMEFRAMES, ALL_TF);
+        }
+     }
+
+   TLineDrawn = true;
+   ChartRedraw();
+  }
+
+//+------------------------------------------------------------------+
+//| Small info label showing the actual cx/cy/n/t calculation.       |
+//+------------------------------------------------------------------+
+void UpdateTInfoLabel()
+  {
+   string lblName = PREFIX "TInfo";
+   if(ObjectFind(0, lblName) < 0)
+     {
+      if(!ObjectCreate(0, lblName, OBJ_LABEL, 0, 0, 0))
+         return;
+      ObjectSetInteger(0, lblName, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
+      ObjectSetInteger(0, lblName, OBJPROP_XDISTANCE, 10);
+      ObjectSetInteger(0, lblName, OBJPROP_YDISTANCE, 10);
+      ObjectSetInteger(0, lblName, OBJPROP_FONTSIZE, 9);
+      ObjectSetInteger(0, lblName, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, lblName, OBJPROP_HIDDEN, true);
+      ObjectSetInteger(0, lblName, OBJPROP_TIMEFRAMES, ALL_TF);
+     }
+   ObjectSetInteger(0, lblName, OBJPROP_COLOR, TLineColor);
+   ObjectSetString(0, lblName, OBJPROP_TEXT, "cx/cy/n/t:" + TLineStatusLine());
+   ChartRedraw();
+  }
+
+//+------------------------------------------------------------------+
+//| Compute cx/cy/n/t from the selected range.                       |
+//| IMPORTANT: cy is NOT the last selected candle. It is the FIRST   |
+//| opposite-direction candle encountered from left to right.       |
+//+------------------------------------------------------------------+
+void UpdateProjection()
+  {
+   ResetProjectionState();
+
+   if(!EnableTLine || !Sel.HasSelection)
+      return;
+
+   int bars = iBars(_Symbol, _Period);
+   if(bars <= 0)
+      return;
+
+   int sb = iBarShift(_Symbol, _Period, Sel.StartTime, false);
+   int eb = iBarShift(_Symbol, _Period, Sel.EndTime, false);
+   if(sb < 0 || eb < 0 || sb < eb)
+      return;
+
+   //--- Chronological left-to-right order is: sb, sb-1, ..., eb.
+   double firstClose = iClose(_Symbol, _Period, sb);
+   double lastClose  = iClose(_Symbol, _Period, eb);
+   double firstOpen  = iOpen(_Symbol, _Period, sb);
+
+   //--- Direction of the selected piece. If net close is unchanged,
+   //    use the first candle direction as the tie-breaker.
+   if(lastClose > firstClose)
+      TLineBullDirection = true;
+   else
+      if(lastClose < firstClose)
+         TLineBullDirection = false;
+      else
+         TLineBullDirection = (firstClose >= firstOpen);
+
+   //--- cx is ALWAYS the OPEN of the first candle under START.
+   TLineStartBar = sb;
+   TLineCx = firstOpen;
+
+   //--- Scan from left to right and find the FIRST opposite candle.
+   int cyBar = -1;
+   for(int k = sb - 1; k >= eb; k--)
+     {
+      double ko = iOpen(_Symbol, _Period, k);
+      double kc = iClose(_Symbol, _Period, k);
+
+      bool candleBull = (kc > ko);
+      bool candleBear = (kc < ko);
+
+      // Doji is neither direction, so it is not the opposite candle.
+      if(TLineBullDirection && candleBear)
+        {
+         cyBar = k;
+         break;
+        }
+      if(!TLineBullDirection && candleBull)
+        {
+         cyBar = k;
+         break;
+        }
+     }
+
+   if(cyBar < 0)
+     {
+      TLineWaitReason = TLineBullDirection
+                         ? "no bearish candle after START inside selection"
+                         : "no bullish candle after START inside selection";
+      UpdateTInfoLabel();
+      return;
+     }
+
+   TLineEndBar = cyBar;
+   TLineCy = iClose(_Symbol, _Period, cyBar);
+
+   //--- n is the ABSOLUTE price distance cx -> cy.
+   TLineN = MathAbs(TLineCy - TLineCx);
+
+   //--- t is the same distance projected beyond cy in the direction
+   //    of the selected piece: cy+n for bullish, cy-n for bearish.
+   if(TLineBullDirection)
+      TLineT = TLineCy + TLineN;
+   else
+      TLineT = TLineCy - TLineN;
+
+   //--- Optional spike filter now checks the candles from START through CY.
+   if(TLineSpikeFilter > 0)
+     {
+      int spikeCount = 0;
+      for(int k = sb; k >= cyBar; k--)
+        {
+         double ko = iOpen(_Symbol, _Period, k);
+         double kh = iHigh(_Symbol, _Period, k);
+         double kl = iLow(_Symbol, _Period, k);
+         double kc = iClose(_Symbol, _Period, k);
+         if(ClassifyCandle(ko, kh, kl, kc) == "Spike")
+            spikeCount++;
+        }
+
+      if(spikeCount < TLineSpikeFilter)
+        {
+         TLineWaitReason = "need at least " + IntegerToString(TLineSpikeFilter) +
+                           " Spike candle(s) from START to CY";
+         UpdateTInfoLabel();
+         return;
+        }
+     }
+
+   UpdateTInfoLabel();
+   DrawTLineAt(cyBar, TLineT);
+  }
+
+//+------------------------------------------------------------------+
+//| Status line for the cx/cy/n/t calculation.                       |
+//+------------------------------------------------------------------+
+string TLineStatusLine()
+  {
+   if(!EnableTLine)
+      return("");
+
+   if(TLineEndBar < 0)
+      return("\nwaiting - " + (TLineWaitReason != "" ? TLineWaitReason : "no valid opposite candle"));
+
+   string dir = TLineBullDirection ? "+" : "-";
+   string s = "\ncx=" + DoubleToString(TLineCx, _Digits) +
+              " cy=" + DoubleToString(TLineCy, _Digits) +
+              " n=" + DoubleToString(TLineN, _Digits) +
+              " t=" + DoubleToString(TLineT, _Digits) +
+              " (" + dir + ")" +
+              (TLineDrawn ? " [drawn]" : " [pending]");
+   return(s);
   }
 
 //+------------------------------------------------------------------+
@@ -952,7 +1247,7 @@ void DrawPathCanvas()
    Canvas.Rectangle(1, 1, cw - 2, ch - 2, XRGB(70, 90, 120));
 
 //--- plot area
-   int left     = 30;      // space for price labels (Y axis)
+   int left     = MathMax(30, TableFontSize * 4 + 4);   // space for price labels (Y axis)
    int right    = cw - 8;
    int classRowY = 15;     // row for the Spike/Trend/Doji boxes (below title)
    int top      = 32;      // below the title + classification row
@@ -999,7 +1294,7 @@ void DrawPathCanvas()
    int denom = (candles > 1 ? candles - 1 : 1);
 
 //--- Spike / Trend / Doji classification boxes (one per candle, top row)
-   Canvas.FontSet("Arial", 7, 0, 0);
+   Canvas.FontSet("Arial", ClassFontSize, 0, 0);
    for(int ci = 0; ci < candles; ci++)
      {
       if(ci >= CandleClassCount)
@@ -1021,39 +1316,39 @@ void DrawPathCanvas()
       int xEnd   = PathPointX(ci, 3, denom, left, right);
       int cx     = (xStart + xEnd) / 2;
 
-      int boxHalfW = 16;
+      int boxHalfW = MathMax(18, ClassFontSize * 3);
       int boxTop   = classRowY;
-      int boxBot   = classRowY + 10;
+      int boxBot   = classRowY + ClassFontSize + 4;
 
       Canvas.FillRectangle(cx - boxHalfW, boxTop, cx + boxHalfW, boxBot, boxColor);
       Canvas.Rectangle(cx - boxHalfW, boxTop, cx + boxHalfW, boxBot, XRGB(15, 17, 20));
-      Canvas.TextOut(cx - boxHalfW + 2, boxTop + 1, cls, XRGB(255, 255, 255), 0);
+      Canvas.TextOut(cx - boxHalfW + 3, boxTop + 2, cls, XRGB(255, 255, 255), 0);
      }
 
 //--- X axis (bottom): one number per point, left to right
 //    candle 1: O=1 L=2 H=3 C=4 (bull) / O=1 H=2 L=3 C=4 (bear), ...
    int labelEvery = 1;
-   int maxXLabels = (right - left) / 22;
+   int maxXLabels = (right - left) / (TableFontSize * 3);
    if(maxXLabels < 1)
       maxXLabels = 1;
    if(candles * 4 > maxXLabels)
       labelEvery = (int)MathCeil((double)(candles * 4) / (double)maxXLabels);
 
-   Canvas.FontSet("Arial", 7, 0, 0);
+   Canvas.FontSet("Arial", TableFontSize, 0, 0);
    for(int j = 0; j < candles * 4; j += labelEvery)
      {
       int ci = j / 4;
       int x = PathPointX(ci, j % 4, denom, left, right);
       // (labels are placed inside the table by PathPointX margins)
       Canvas.LineVertical(x, top, bottom, XRGB(45, 55, 70));
-      Canvas.TextOut(x - 5, ch - 13, IntegerToString(j + 1), XRGB(170, 190, 210), 0);
+      Canvas.TextOut(x - (TableFontSize / 2 + 2), ch - TableFontSize - 6, IntegerToString(j + 1), XRGB(170, 190, 210), 0);
      }
 //--- last point gridline + label
 // (last point index = candles*4 - 1, handled directly below)
    int xLast = PathPointX(candles - 1, 3, denom, left, right);
 // (PathPointX places the last point inside the table via margins)
    Canvas.LineVertical(xLast, top, bottom, XRGB(45, 55, 70));
-   Canvas.TextOut(xLast - 7, ch - 13, IntegerToString(candles * 4), XRGB(170, 190, 210), 0);
+   Canvas.TextOut(xLast - (TableFontSize + 2), ch - TableFontSize - 6, IntegerToString(candles * 4), XRGB(170, 190, 210), 0);
 
 //--- Y axis (left): price labels, bottom -> top
    int nGrid = (int)MathFloor(totalPrice / step);
@@ -1062,7 +1357,7 @@ void DrawPathCanvas()
       double price = pmin + g * step;
       int y = bottom - (int)MathRound((price - pmin) / totalPrice * (bottom - top));
       Canvas.LineHorizontal(left, right, y, XRGB(45, 55, 70));
-      Canvas.TextOut(2, y - 4, DoubleToString(price, dec), XRGB(170, 190, 210), 0);
+      Canvas.TextOut(2, y - TableFontSize / 2 - 1, DoubleToString(price, dec), XRGB(170, 190, 210), 0);
      }
 
    /* ---- candle-body drawing disabled (4-point polyline used instead) ----
@@ -1457,6 +1752,14 @@ int OnCalculate(const int rates_total,
            }
         }
      }
+//--- T-line live update: draw the horizontal line as soon as bar t
+//    appears on the chart (works in live market and on history)
+   if(prev_calculated == 0 || prev_calculated < rates_total)
+     {
+      if(!TLineDrawn && EnableTLine && Sel.HasSelection)
+         UpdateProjection();
+     }
+
    return(rates_total);
   }
 
@@ -1473,7 +1776,6 @@ int FindOwnSubwindow()
      }
    return(1);
   }
-
 //+------------------------------------------------------------------+
-//| End of spikedetector   arad azadbakht                                          |
+//| End of spikedetector   arad azadbakht                            |
 //+------------------------------------------------------------------+
