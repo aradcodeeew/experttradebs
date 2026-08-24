@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|             Price Path Analyzer - Panel UI v5.1                   |
+//|              Price Path Analyzer - Panel UI v5.1                   |
 //|   v5.1: survives chart timeframe changes (state is restored)      |
 //|   v5.2: T-Line projection (cx/cy/n/t) added                      |
 //|        Range Selection + Draggable Panel + Top Path Strip         |
