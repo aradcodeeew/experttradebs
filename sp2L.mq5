@@ -59,6 +59,10 @@ input int             TLineSpikeFilter = 1;         // Draw only if this many Sp
 input bool            TLineShowLabel = true;        // Show "T" label on the line
 input color           TLineLabelColor = clrYellow;  // T label color
 
+//--- Panel position (anchored to the RIGHT/top of the chart, near the price scale)
+input int             PanelLeftX = 180;     // Panel X from the RIGHT edge (px) - near the price
+input int             PanelTopY  = 150;     // Panel Y from the TOP edge (px)
+
 
 //--- Object names
 #define PREFIX     "PPA_"
@@ -1505,10 +1509,10 @@ void CreatePanel()
    EnsureObject(O_BG, OBJ_RECTANGLE_LABEL);
    if(ObjectFind(0, O_BG) >= 0)
      {
-      PanelX = (int)ObjectGetInteger(0, O_BG, OBJPROP_XDISTANCE);
-      PanelY = (int)ObjectGetInteger(0, O_BG, OBJPROP_YDISTANCE);
+      PanelX = PanelLeftX;
+      PanelY = PanelTopY;
      }
-   ObjectSetInteger(0, O_BG, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, O_BG, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
    ObjectSetInteger(0, O_BG, OBJPROP_XDISTANCE, PanelX);
    ObjectSetInteger(0, O_BG, OBJPROP_YDISTANCE, PanelY);
    ObjectSetInteger(0, O_BG, OBJPROP_XSIZE, PN_W);
@@ -1527,7 +1531,7 @@ void CreatePanel()
 //--- grab bar: drag the whole panel from this top strip
    RegisterChild(O_GRAB, 0, 0);
    EnsureObject(O_GRAB, OBJ_RECTANGLE_LABEL);
-   ObjectSetInteger(0, O_GRAB, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, O_GRAB, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
    ObjectSetInteger(0, O_GRAB, OBJPROP_XDISTANCE, PanelX);
    ObjectSetInteger(0, O_GRAB, OBJPROP_YDISTANCE, PanelY);
    ObjectSetInteger(0, O_GRAB, OBJPROP_XSIZE, PN_W);
@@ -1546,7 +1550,7 @@ void CreatePanel()
 //--- children (relative offsets, moved together with panel)
    RegisterChild(O_TITLE, 10, 6);
    EnsureObject(O_TITLE, OBJ_LABEL);
-   ObjectSetInteger(0, O_TITLE, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, O_TITLE, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
    ObjectSetInteger(0, O_TITLE, OBJPROP_XDISTANCE, PanelX + 10);
    ObjectSetInteger(0, O_TITLE, OBJPROP_YDISTANCE, PanelY + 6);
    ObjectSetString(0, O_TITLE, OBJPROP_TEXT, "Price Path Analyzer");
@@ -1559,7 +1563,7 @@ void CreatePanel()
 
    RegisterChild(O_STAT, 10, 24);
    EnsureObject(O_STAT, OBJ_LABEL);
-   ObjectSetInteger(0, O_STAT, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, O_STAT, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
    ObjectSetInteger(0, O_STAT, OBJPROP_XDISTANCE, PanelX + 10);
    ObjectSetInteger(0, O_STAT, OBJPROP_YDISTANCE, PanelY + 24);
    ObjectSetString(0, O_STAT, OBJPROP_TEXT, "");
@@ -1640,7 +1644,7 @@ void MovePanelChildren()
 void CreateButton(string name, int x, int y, int w, int h, string text, color bg)
   {
    EnsureObject(name, OBJ_BUTTON);
-   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
    ObjectSetInteger(0, name, OBJPROP_XSIZE, w);
