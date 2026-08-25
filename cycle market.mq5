@@ -1,11 +1,9 @@
-// soon
 //+------------------------------------------------------------------+
 //|                    Cycle Market  v1.0                              |
 //|  Analysis-only indicator (panel layout like SP2L / Spike)          |
-//|  3 mode buttons: Spike / Chanel / Range  +  Check + Clear          |
-//|  Selection: green (START) + yellow (END) vertical lines, width 2   |
+//|  3 mode buttons: Spike / Chanel / Range  +  Calculate + Clear      |
+//|  Selection: green (START) then red (END), 2 clicks, then cycle     |
 //|  Panel: fixed at the right-top corner, near the price scale        |
-//|  Display box above the Spike button shows the detection result     |
 //+------------------------------------------------------------------+
 #property strict
 #property indicator_chart_window
@@ -26,7 +24,7 @@ input int  SpikeDevPts = 50;      // Spike: min |Close - 1h MA| deviation (point
 #define O_BTN_S     PREFIX "Btn_Spike"
 #define O_BTN_C     PREFIX "Btn_Chanel"
 #define O_BTN_R     PREFIX "Btn_Range"
-#define O_BTN_CHK   PREFIX "Btn_Check"
+#define O_BTN_CHK   PREFIX "Btn_Calc"
 #define O_BTN_X     PREFIX "Btn_Clear"
 #define O_START     PREFIX "Start"
 #define O_END       PREFIX "End"
@@ -49,18 +47,28 @@ enum CM_Mode
    CM_RANGE  = 3
   };
 
+//--- selection click cycle stage
+//   0 = awaiting 1st click (green), 1 = green placed (await red),
+//   2 = both placed (next click clears and restarts)
+enum CM_ClickStage
+  {
+   CLICK_READY   = 0,
+   CLICK_GREEN   = 1,
+   CLICK_BOTH    = 2
+  };
+
 //--- state
 struct SelState
   {
-   bool              InSelection;
-   datetime          StartTime;
-   datetime          EndTime;
-   bool              HasSelection;
+   datetime StartTime;
+   datetime EndTime;
+   bool     HasSelection;
   };
 
-CM_Mode  g_mode = CM_NONE;
-SelState Sel;
-double   Dummy[];
+CM_Mode        g_mode   = CM_NONE;
+CM_ClickStage  g_click  = CLICK_READY;
+SelState       Sel;
+double         Dummy[];
 
 //+------------------------------------------------------------------+
 //| Indicator initialization                                          |
@@ -73,34 +81,23 @@ int OnInit()
 //--- restore the last selected mode from a terminal global variable
    string gvMode = "CM_Mode_" + IntegerToString(ChartID());
    g_mode = CM_NONE;
+   g_click = CLICK_READY;
    if(GlobalVariableCheck(gvMode))
       g_mode = (CM_Mode)(int)GlobalVariableGet(gvMode);
 
-   Sel.InSelection = false;
-   Sel.StartTime   = 0;
-   Sel.EndTime     = 0;
-   Sel.HasSelection= false;
-
-//--- restore the selection from surviving chart objects (TF change)
-   if(ObjectFind(0, O_START) >= 0 && ObjectFind(0, O_END) >= 0)
-     {
-      Sel.StartTime    = (datetime)ObjectGetInteger(0, O_START, OBJPROP_TIME, 0);
-      Sel.EndTime      = (datetime)ObjectGetInteger(0, O_END, OBJPROP_TIME, 0);
-      Sel.HasSelection = (Sel.EndTime > Sel.StartTime);
-     }
+   Sel.StartTime    = 0;
+   Sel.EndTime      = 0;
+   Sel.HasSelection = false;
 
    CreatePanel();
    ApplyModeButtons();
 
-   if(Sel.HasSelection)
-     {
-      DrawStartLine();
-      DrawEndLine();
-      UpdateDisplay("press Check");
-     }
-   else
-      UpdateDisplay("");
+   if(ObjectFind(0, O_START) < 0)
+      ObjectDelete(0, O_START);
+   if(ObjectFind(0, O_END) < 0)
+      ObjectDelete(0, O_END);
 
+   UpdateDisplay("");
    return(INIT_SUCCEEDED);
   }
 
@@ -112,7 +109,6 @@ void OnDeinit(const int reason)
    string gvMode = "CM_Mode_" + IntegerToString(ChartID());
    GlobalVariableSet(gvMode, (double)g_mode);
 
-//--- on TF change / parameter change keep the chart objects
    if(reason == REASON_CHARTCHANGE || reason == REASON_PARAMETERS)
      {
       ChartRedraw();
@@ -142,14 +138,14 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
                ToggleMode(CM_RANGE);
             else
                if(sparam == O_BTN_CHK)
-                  DoCheck();
+                  DoCalculate();
                else
                   if(sparam == O_BTN_X)
                      ClearAll();
       return;
      }
 
-//--- chart click -> selection (start = green, end = yellow)
+//--- chart click -> build the selection (green then red then cycle)
    if(id == CHARTEVENT_CLICK)
      {
       int x = (int)lparam;
@@ -160,10 +156,10 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 
       datetime clickTime = 0;
       double clickPrice = 0;
-      int subwindow = 0;
-      if(ChartXYToTimePrice(0, x, y, subwindow, clickTime, clickPrice))
+      int sw = 0;
+      if(ChartXYToTimePrice(0, x, y, sw, clickTime, clickPrice))
         {
-         if(subwindow != 0)
+         if(sw != 0)
             return;
          OnChartClick(clickTime);
         }
@@ -187,7 +183,7 @@ datetime SnapToBarTime(datetime t)
    if(bars <= 0)
       return(t);
    int idx = iBarShift(_Symbol, _Period, t, false);
-   if(idx < 0 || idx >= bars)
+   if(idx < 0)
       return(t);
    datetime bt = iTime(_Symbol, _Period, idx);
    if(bt <= 0)
@@ -196,37 +192,57 @@ datetime SnapToBarTime(datetime t)
   }
 
 //+------------------------------------------------------------------+
-//| Chart click -> build the selection                                |
+//| Chart click: 3-state cycle (green -> red -> clear+restart)        |
 //+------------------------------------------------------------------+
 void OnChartClick(datetime t)
   {
    if(g_mode == CM_NONE)
+     {
+      UpdateDisplay("select a mode first");
       return;
+     }
 
    t = SnapToBarTime(t);
 
-   if(!Sel.InSelection)
+//--- 3rd click (both lines on chart): clear and start a fresh green
+   if(g_click == CLICK_BOTH)
      {
+      ObjectDelete(0, O_START);
       ObjectDelete(0, O_END);
-      Sel.StartTime   = t;
-      Sel.InSelection = true;
-      Sel.HasSelection= false;
+      Sel.StartTime    = 0;
+      Sel.EndTime      = 0;
+      Sel.HasSelection = false;
+
+      Sel.StartTime = t;
+      g_click = CLICK_GREEN;
       DrawStartLine();
-      UpdateDisplay("now click END");
+      UpdateDisplay("now click END (red)");
+      return;
      }
-   else
+
+//--- 2nd click: place the red END line
+   if(g_click == CLICK_GREEN)
      {
       if(t <= Sel.StartTime)
         {
-         UpdateDisplay("END after START");
+         UpdateDisplay("END must be after START");
          return;
         }
       Sel.EndTime      = t;
-      Sel.InSelection  = false;
       Sel.HasSelection = true;
+      g_click = CLICK_BOTH;
       DrawEndLine();
-      UpdateDisplay("press Check");
+      UpdateDisplay("press Calculate");
+      return;
      }
+
+//--- 1st click: place the green START line
+   Sel.StartTime = t;
+   g_click = CLICK_GREEN;
+   ObjectDelete(0, O_START);
+   ObjectDelete(0, O_END);
+   DrawStartLine();
+   UpdateDisplay("now click END (red)");
   }
 
 //+------------------------------------------------------------------+
@@ -235,9 +251,9 @@ void OnChartClick(datetime t)
 void ToggleMode(CM_Mode m)
   {
    if(g_mode == m)
-      g_mode = CM_NONE;          // clicking the active mode turns it OFF
+      g_mode = CM_NONE;
    else
-      g_mode = m;                // activate this mode, others become OFF
+      g_mode = m;
 
    ApplyModeButtons();
 
@@ -247,16 +263,7 @@ void ToggleMode(CM_Mode m)
       return;
      }
 
-//--- two selector lines must appear (green + yellow)
-   if(!Sel.HasSelection)
-      CreateDefaultSelection();
-   else
-     {
-      DrawStartLine();
-      DrawEndLine();
-     }
-
-   UpdateDisplay("select range");
+   UpdateDisplay("click chart for green START");
   }
 
 //+------------------------------------------------------------------+
@@ -274,25 +281,21 @@ void ApplyModeButtons()
 //+------------------------------------------------------------------+
 void SetBtnState(string name, bool on, string label, color onBg, color offBg, color tc)
   {
-   ObjectSetString(0, name, OBJPROP_TEXT,   label + (on ? ": ON" : ": OFF"));
+   ObjectSetString(0, name, OBJPROP_TEXT,     label + (on ? ": ON" : ": OFF"));
    ObjectSetInteger(0, name, OBJPROP_BGCOLOR, on ? onBg : offBg);
    ObjectSetInteger(0, name, OBJPROP_COLOR,   tc);
    ChartRedraw();
   }
 
 //+------------------------------------------------------------------+
-//| Check button: run the rule of the active mode                     |
+//| Calculate button: run the rule of the active mode                 |
+//| If no result -> "not see"                                         |
 //+------------------------------------------------------------------+
-void DoCheck()
+void DoCalculate()
   {
-   if(g_mode == CM_NONE)
+   if(g_mode == CM_NONE || !Sel.HasSelection)
      {
-      UpdateDisplay("select mode");
-      return;
-     }
-   if(!Sel.HasSelection)
-     {
-      UpdateDisplay("select range");
+      UpdateDisplay("not see");
       return;
      }
 
@@ -303,54 +306,57 @@ void DoCheck()
       case CM_CHANEL: res = CheckChanel(); break;
       case CM_RANGE:  res = CheckRange();  break;
      }
-   UpdateDisplay(res);
+
+   if(res == "" || res == "no spike" || res == "no range" ||
+      res == "flat" || res == "not see")
+      UpdateDisplay("not see");
+   else
+      UpdateDisplay(res);
   }
 
 //+------------------------------------------------------------------+
-//| SPIKE rule: selected candles too far from the 1-hour MA           |
+//| SPIKE rule                                                       |
 //+------------------------------------------------------------------+
 string CheckSpike()
   {
    if(SpikeDevPts <= 0)
-      return("spike off");
+      return("");
 
-//--- 1 hour = 3600 sec -> number of bars on the current timeframe
    int maPeriod = (int)MathMax(1, 3600 / PeriodSeconds(_Period));
-
    int bars = iBars(_Symbol, _Period);
    int sb = iBarShift(_Symbol, _Period, Sel.StartTime, false);
    int eb = iBarShift(_Symbol, _Period, Sel.EndTime, false);
    if(sb < 0 || eb < 0 || sb < eb || bars <= 0)
-      return("no range");
+      return("");
 
    double maxDev = 0;
    for(int i = sb; i >= eb; i--)
      {
       if(i + maPeriod - 1 >= bars)
-         continue;                       // not enough history for this bar
+         continue;
       double sum = 0;
       for(int k = i; k < i + maPeriod; k++)
          sum += iClose(_Symbol, _Period, k);
-      double ma   = sum / maPeriod;
-      double dev  = MathAbs(iClose(_Symbol, _Period, i) - ma) / _Point;
+      double ma  = sum / maPeriod;
+      double dev = MathAbs(iClose(_Symbol, _Period, i) - ma) / _Point;
       if(dev > maxDev)
          maxDev = dev;
      }
 
    if(maxDev >= SpikeDevPts)
       return("spike");
-   return("no spike");
+   return("");
   }
 
 //+------------------------------------------------------------------+
-//| CHANEL rule: start candle vs end candle -> trend direction        |
+//| CHANEL rule                                                      |
 //+------------------------------------------------------------------+
 string CheckChanel()
   {
    int sb = iBarShift(_Symbol, _Period, Sel.StartTime, false);
    int eb = iBarShift(_Symbol, _Period, Sel.EndTime, false);
    if(sb < 0 || eb < 0)
-      return("no range");
+      return("");
 
    double cs = iClose(_Symbol, _Period, sb);
    double ce = iClose(_Symbol, _Period, eb);
@@ -359,20 +365,20 @@ string CheckChanel()
       return("trend up");
    if(cs > ce)
       return("trend down");
-   return("flat");
+   return("");
   }
 
 //+------------------------------------------------------------------+
-//| RANGE rule: highest high first, then lowest low, then revisit     |
+//| RANGE rule                                                       |
 //+------------------------------------------------------------------+
 string CheckRange()
   {
    int sb = iBarShift(_Symbol, _Period, Sel.StartTime, false);
    int eb = iBarShift(_Symbol, _Period, Sel.EndTime, false);
    if(sb < 0 || eb < 0 || sb < eb)
-      return("no range");
+      return("");
 
-   int n = sb - eb + 1;                  // candles in selection, left -> right
+   int n = sb - eb + 1;
    double highs[], lows[];
    ArrayResize(highs, n);
    ArrayResize(lows,  n);
@@ -385,7 +391,6 @@ string CheckRange()
       idx++;
      }
 
-//--- 1) leftmost candle with the highest high
    double hiH = highs[0];
    int    hiIdx = 0;
    for(int j = 1; j < n; j++)
@@ -395,7 +400,6 @@ string CheckRange()
          hiIdx  = j;
         }
 
-//--- 2) after it: the first candle that makes the lowest low
    double loL = lows[hiIdx + 1];
    int    loIdx = hiIdx + 1;
    for(int j = hiIdx + 2; j < n; j++)
@@ -406,13 +410,12 @@ string CheckRange()
         }
 
    if(loIdx <= hiIdx)
-      return("no range");
+      return("");
 
    double span = hiH - loL;
    if(span <= 0)
-      return("no range");
+      return("");
 
-//--- 3) after the low: price must come back near the high / low levels
    bool revisit = false;
    for(int j = loIdx + 1; j < n && !revisit; j++)
      {
@@ -424,71 +427,7 @@ string CheckRange()
 
    if(revisit)
       return("range");
-   return("no range");
-  }
-
-//+------------------------------------------------------------------+
-//| Create a default ~13-candle selection in the middle of the chart  |
-//+------------------------------------------------------------------+
-void CreateDefaultSelection()
-  {
-   int first = (int)ChartGetInteger(0, CHART_FIRST_VISIBLE_BAR);
-   int vis   = (int)ChartGetInteger(0, CHART_VISIBLE_BARS);
-   if(vis <= 0)
-      vis = 100;
-   int center = first - vis / 2;
-   int bars   = iBars(_Symbol, _Period);
-   datetime centerTime = 0;
-   if(center >= 0 && center < bars)
-      centerTime = iTime(_Symbol, _Period, center);
-   if(centerTime <= 0)
-      centerTime = TimeCurrent();
-
-   long step = (long)PeriodSeconds(_Period) * 6;
-   Sel.StartTime    = (datetime)((long)centerTime - step);
-   Sel.EndTime      = (datetime)((long)centerTime + step);
-   Sel.InSelection  = false;
-   Sel.HasSelection = (Sel.EndTime > Sel.StartTime);
-
-   DrawStartLine();
-   DrawEndLine();
-   CenterOnSelection();
-   ChartRedraw();
-  }
-
-//+------------------------------------------------------------------+
-//| Center the chart on the selection                                 |
-//+------------------------------------------------------------------+
-void CenterOnSelection()
-  {
-   if(!Sel.HasSelection)
-      return;
-   int sb = iBarShift(_Symbol, _Period, Sel.StartTime, false);
-   int eb = iBarShift(_Symbol, _Period, Sel.EndTime, false);
-   if(sb < 0 || eb < 0)
-      return;
-   if(sb < eb)
-     {
-      int t = sb; sb = eb; eb = t;
-     }
-   int mid  = (sb + eb) / 2;
-   int bars = iBars(_Symbol, _Period);
-   if(bars <= 0)
-      return;
-   if(mid < 0)
-      mid = 0;
-   if(mid >= bars)
-      mid = bars - 1;
-   int visible = (int)ChartGetInteger(0, CHART_VISIBLE_BARS);
-   if(visible <= 0)
-      visible = 100;
-   int f = mid + visible / 2;
-   if(f >= bars)
-      f = bars - 1;
-   if(f < 0)
-      f = 0;
-   ChartSetInteger(0, CHART_FIRST_VISIBLE_BAR, f);
-   ChartRedraw();
+   return("");
   }
 
 //+------------------------------------------------------------------+
@@ -505,10 +444,10 @@ void AfterLinesDragged()
    if(Sel.EndTime > Sel.StartTime)
      {
       Sel.HasSelection = true;
-      Sel.InSelection  = false;
       ObjectSetInteger(0, O_START, OBJPROP_TIME, Sel.StartTime);
       ObjectSetInteger(0, O_END,   OBJPROP_TIME, Sel.EndTime);
-      UpdateDisplay("press Check");
+      g_click = CLICK_BOTH;
+      UpdateDisplay("press Calculate");
      }
   }
 
@@ -522,7 +461,7 @@ void DrawStartLine()
    ObjectSetInteger(0, O_START, OBJPROP_COLOR, clrLimeGreen);
    ObjectSetInteger(0, O_START, OBJPROP_WIDTH, 2);
    ObjectSetInteger(0, O_START, OBJPROP_STYLE, STYLE_SOLID);
-   ObjectSetInteger(0, O_START, OBJPROP_BACK, true);
+   // (lines drawn on top, like SP2L)
    ObjectSetInteger(0, O_START, OBJPROP_SELECTABLE, true);
    ObjectSetInteger(0, O_START, OBJPROP_SELECTED, false);
    ObjectSetInteger(0, O_START, OBJPROP_HIDDEN, false);
@@ -530,16 +469,16 @@ void DrawStartLine()
   }
 
 //+------------------------------------------------------------------+
-//| Draw the yellow END line                                          |
+//| Draw the red END line                                             |
 //+------------------------------------------------------------------+
 void DrawEndLine()
   {
    EnsureObject(O_END, OBJ_VLINE);
    ObjectSetInteger(0, O_END, OBJPROP_TIME, Sel.EndTime);
-   ObjectSetInteger(0, O_END, OBJPROP_COLOR, clrYellow);
+   ObjectSetInteger(0, O_END, OBJPROP_COLOR, clrRed);
    ObjectSetInteger(0, O_END, OBJPROP_WIDTH, 2);
    ObjectSetInteger(0, O_END, OBJPROP_STYLE, STYLE_SOLID);
-   ObjectSetInteger(0, O_END, OBJPROP_BACK, true);
+   // (lines drawn on top, like SP2L)
    ObjectSetInteger(0, O_END, OBJPROP_SELECTABLE, true);
    ObjectSetInteger(0, O_END, OBJPROP_SELECTED, false);
    ObjectSetInteger(0, O_END, OBJPROP_HIDDEN, false);
@@ -547,17 +486,17 @@ void DrawEndLine()
   }
 
 //+------------------------------------------------------------------+
-//| Clear the selection and the display box                           |
+//| Clear lines only (does NOT switch the mode button OFF)            |
 //+------------------------------------------------------------------+
 void ClearAll()
   {
    ObjectDelete(0, O_START);
    ObjectDelete(0, O_END);
-   Sel.InSelection  = false;
    Sel.StartTime    = 0;
    Sel.EndTime      = 0;
    Sel.HasSelection = false;
-   UpdateDisplay("");
+   g_click = CLICK_READY;
+   UpdateDisplay("click chart for green START");
    ChartRedraw();
   }
 
@@ -572,7 +511,7 @@ bool EnsureObject(string name, ENUM_OBJECT type)
   }
 
 //+------------------------------------------------------------------+
-//| Update the small display box above the Spike button               |
+//| Update the small display box                                      |
 //+------------------------------------------------------------------+
 void UpdateDisplay(string txt)
   {
@@ -583,11 +522,10 @@ void UpdateDisplay(string txt)
   }
 
 //+------------------------------------------------------------------+
-//| Build the fixed panel (right-top corner, like SP2L)               |
+//| Build the fixed panel (right-top corner)                          |
 //+------------------------------------------------------------------+
 void CreatePanel()
   {
-//--- panel background
    EnsureObject(O_BG, OBJ_RECTANGLE_LABEL);
    ObjectSetInteger(0, O_BG, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
    ObjectSetInteger(0, O_BG, OBJPROP_XDISTANCE, PANEL_X);
@@ -604,7 +542,6 @@ void CreatePanel()
    ObjectSetInteger(0, O_BG, OBJPROP_ZORDER, 100);
    ObjectSetInteger(0, O_BG, OBJPROP_TIMEFRAMES, ALL_TF);
 
-//--- display box (above the Spike button)
    EnsureObject(O_DISP_BG, OBJ_RECTANGLE_LABEL);
    ObjectSetInteger(0, O_DISP_BG, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
    ObjectSetInteger(0, O_DISP_BG, OBJPROP_XDISTANCE, PANEL_X + 10);
@@ -621,7 +558,6 @@ void CreatePanel()
    ObjectSetInteger(0, O_DISP_BG, OBJPROP_ZORDER, 101);
    ObjectSetInteger(0, O_DISP_BG, OBJPROP_TIMEFRAMES, ALL_TF);
 
-//--- display label (result text)
    EnsureObject(O_DISP_LBL, OBJ_LABEL);
    ObjectSetInteger(0, O_DISP_LBL, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
    ObjectSetInteger(0, O_DISP_LBL, OBJPROP_XDISTANCE, PANEL_X + 16);
@@ -630,17 +566,15 @@ void CreatePanel()
    ObjectSetInteger(0, O_DISP_LBL, OBJPROP_COLOR, clrWhite);
    ObjectSetInteger(0, O_DISP_LBL, OBJPROP_FONTSIZE, 13);
    ObjectSetString(0, O_DISP_LBL, OBJPROP_FONT, "Arial Black");
-      // (bold look via Arial Black font)
    ObjectSetInteger(0, O_DISP_LBL, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, O_DISP_LBL, OBJPROP_ZORDER, 102);
    ObjectSetInteger(0, O_DISP_LBL, OBJPROP_TIMEFRAMES, ALL_TF);
 
-//--- buttons (one column): Spike / Chanel / Range / Check / Clear
-   CreateButton(O_BTN_S, PANEL_X + 10, PANEL_Y + 52,  184, 24, "Spike",  C'25,155,70', clrWhite);
-   CreateButton(O_BTN_C, PANEL_X + 10, PANEL_Y + 80,  184, 24, "Chanel", C'240,200,30', clrBlack);
-   CreateButton(O_BTN_R, PANEL_X + 10, PANEL_Y + 108, 184, 24, "Range",  C'25,65,150', clrWhite);
-   CreateButton(O_BTN_CHK,PANEL_X + 10, PANEL_Y + 136, 184, 24, "Check", C'70,95,150', clrWhite);
-   CreateButton(O_BTN_X, PANEL_X + 10, PANEL_Y + 164, 184, 24, "Clear",  C'150,50,50', clrWhite);
+   CreateButton(O_BTN_S, PANEL_X + 10, PANEL_Y + 52,  184, 24, "Spike",     C'25,155,80', clrWhite);
+   CreateButton(O_BTN_C, PANEL_X + 10, PANEL_Y + 80,  184, 24, "Chanel",    C'240,200,30', clrBlack);
+   CreateButton(O_BTN_R, PANEL_X + 10, PANEL_Y + 108, 184, 24, "Range",     C'25,65,150', clrWhite);
+   CreateButton(O_BTN_CHK,PANEL_X + 10, PANEL_Y + 136, 184, 24, "Calculate", C'70,95,150', clrWhite);
+   CreateButton(O_BTN_X, PANEL_X + 10, PANEL_Y + 164, 184, 24, "Clear",     C'150,50,50', clrWhite);
 
    ChartRedraw();
   }
@@ -662,7 +596,6 @@ void CreateButton(string name, int x, int y, int w, int h, string text, color bg
    ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, C'90,100,120');
    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 11);
    ObjectSetString(0, name, OBJPROP_FONT, "Arial Black");
-      // (bold look via Arial Black font)
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_ZORDER, 103);
    ObjectSetInteger(0, name, OBJPROP_TIMEFRAMES, ALL_TF);
