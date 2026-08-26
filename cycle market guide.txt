@@ -1,274 +1,34 @@
-╔════════════════════════════════════════════════════════════════════════════╗
-║                    Price Path Analyzer - Quick Start                      ║
-║                                                                            ║
-║                  Visualize Real Intrabar Price Movement                   ║
-║                          in MetaTrader 5                                   ║
-╚════════════════════════════════════════════════════════════════════════════╝
 
+مسیر: MQL5\Indicators\MarketCycle_Indicator_v1.0_GUIDE_FA.txt
+(همونجا که فایل اندیکاتوره، تا همیشه همراهش باشه)
 
-📦 WHAT'S INCLUDED
-═════════════════════════════════════════════════════════════════════════════
+📋 داخلش چی نوشته؟
 
-PricePathAnalyzer.zip contains:
-  ✓ PricePathAnalyzer.mq5    (Indicator code)
-  ✓ PPA_GUIDE_FA.txt         (Full guide in Farsi)
+بخش
+محتوا
 
+نصب
+کجا فایل رو بذاری، کامپایل با F7 و اضافهکردن به چارت
 
-🚀 INSTALLATION (2 MINUTES)
-═════════════════════════════════════════════════════════════════════════════
+شکل پنل
+نمودار ردیفها (SPIKE/TREND/RANGE، CHECK/CLEAR/HIDE، باکس نتیجه)
 
-Step 1: Extract ZIP
-  ├─ Download PricePathAnalyzer.zip
-  └─ Extract to any folder
+نحوه کارکرد
+گامبهگام: ۱) انتخاب حالت → ۲) دو کلیک (سبز بعد قرمز) → ۳) CHECK → نتیجه
 
-Step 2: Copy .mq5 File
-  ├─ In MT5: File → Open Data Folder
-  ├─ Navigate: MQL5/Indicators
-  ├─ Copy: PricePathAnalyzer.mq5 here
-  └─ Close MT5 completely
+HIDE / SHOW
+طرز درگ کردن دکمه SHOW و باز شدن پنل در جای جدید
 
-Step 3: Restart MetaTrader 5
-  ├─ Reopen MT5
-  ├─ File → New Chart (pick EURUSD or any pair)
-  ├─ Timeframe: M5
-  └─ Done!
+شرطهای هر حالت
+خلاصهٔ منطق SPIKE و TREND و RANGE به زبان ساده
 
-Step 4: Add Indicator
-  ├─ Insert → Indicators → Custom → PricePathAnalyzer
-  ├─ Click OK (use default settings)
-  ├─ Watch the magic happen!
-  └─ Done!
+پارامترها
+جدول کامل Input ها با پیشفرضها و توضیح فارسی
 
+نکات
+اینکه خطوط فقط با کلیک میان، غیرقابلجابهجایین، و مقادیر قابلتنظیماند
 
-💡 WHAT IT DOES
-═════════════════════════════════════════════════════════════════════════════
+راهنمای سریع
+خلاصه یکخطی آخر کار
 
-Instead of just seeing:
-  ┌─ Candle
-  ├─ OHLC: O=1, H=5, L=0, C=3
-  └─ No intrabar details
-
-You see the REAL PATH:
-  ┌─ 1 (Open)
-  ├─ 5 (High - hit first at 10:02)
-  ├─ 0 (Low - hit second at 10:04)
-  ├─ 3 (Close)
-  └─ Connected as: 1→5→0→3
-
-
-🎯 KEY FEATURE: High/Low Order Detection
-═════════════════════════════════════════════════════════════════════════════
-
-The indicator automatically determines:
-
-Path Type 1:  O → H → L → C  (High reached first)
-Path Type 2:  O → L → H → C  (Low reached first)
-
-How? Uses M1 lower-timeframe data to check which price level
-was reached first during the candle.
-
-
-⚙️ MAIN SETTINGS (Easy to understand)
-═════════════════════════════════════════════════════════════════════════════
-
-Display Mode: Where to show the path
-  ├─ 0 = On the chart itself (Default - easiest to see)
-  ├─ 1 = Below chart (sub-window)
-  └─ 2 = Separate window
-
-ShowPath: Show the line? (true/false)
-  └─ Default: true
-
-PathColor: Line color
-  ├─ clrDodgerBlue (Default - light blue)
-  ├─ clrRed
-  ├─ clrGreen
-  └─ Any MT5 color name
-
-PathWidth: Line thickness
-  ├─ 1 (thin) - 2 (normal) - 3 - 4 - 5 (thick)
-  └─ Default: 2
-
-ShowPoints: Show O/H/L/C dots?
-  ├─ true = Yes, show dots (Default)
-  └─ false = No dots
-
-PointSize: Dot size
-  ├─ 2 (small) - 3 (normal) - 4 - 5 (big)
-  └─ Default: 3
-
-LowerTimeframe: Where to get High/Low timing
-  ├─ PERIOD_M1 (Best accuracy - Default)
-  ├─ PERIOD_M5
-  └─ PERIOD_M15 (Less accurate)
-
-CandlesToAnalyze: How many recent candles to show
-  ├─ 1 = Last candle only
-  ├─ 5 = Last 5 candles (Default)
-  └─ 10 = Last 10 candles
-
-ShowInfo: Show text info on chart?
-  └─ true/false (Default: true)
-
-
-🎨 VISUAL GUIDE
-═════════════════════════════════════════════════════════════════════════════
-
-Color codes for points:
-
-  🟢 GREEN (O)     = Open
-  🔴 RED (H)       = High
-  🔵 BLUE (L)      = Low
-  🟠 ORANGE (C)    = Close
-
-The line connecting them is whatever color you set (PathColor).
-
-
-📊 REAL EXAMPLE: EURUSD M5
-═════════════════════════════════════════════════════════════════════════════
-
-Candle from 10:00-10:05:
-
-OHLC Data:
-  Open:  1.17000
-  High:  1.17025
-  Low:   1.16980
-  Close: 1.17010
-
-M1 check shows:
-  ✓ High hit at 10:02
-  ✓ Low hit at 10:04
-
-Result: High came first!
-
-Path drawn: O → H → L → C
-Visual:
-  1.17025 ┌─●(H)
-          │   \
-  1.17010 │    \●(C)
-          │    /
-  1.17000●(O)/
-          │/
-  1.16980●(L)
-
-
-❌ WHAT IT'S NOT
-═════════════════════════════════════════════════════════════════════════════
-
-✗ NOT an Expert Advisor (no trading)
-✗ NOT automatic (manual observation only)
-✗ NOT a signal generator (purely analytical)
-✓ Just a visualization tool
-
-
-✅ WHAT IT IS
-═════════════════════════════════════════════════════════════════════════════
-
-✓ Pure analysis indicator
-✓ Shows real intrabar movement
-✓ Helps understand candle structure
-✓ Great for studying price behavior
-✓ Useful for strategy validation
-
-
-🔍 USE CASES
-═════════════════════════════════════════════════════════════════════════════
-
-1. Spike Detection
-   └─ See if multiple candles move continuously in one direction
-
-2. Fake Spike Detection
-   └─ Spot when candles have large shadows (price rejects)
-
-3. Market Structure Analysis
-   └─ Understand how price moves within candles
-
-4. Entry Point Verification
-   └─ Check if your strategy entry makes sense
-
-5. Pattern Recognition
-   └─ Study how real price paths look
-
-6. Reversal Analysis
-   └─ See where reversals happen within candles
-
-
-⚠️ IMPORTANT NOTES
-═════════════════════════════════════════════════════════════════════════════
-
-• Needs M1 data: Without M1, High/Low order will be marked "UNKNOWN"
-• Historical limitation: Can't reliably analyze candles older than 1-2 months
-  (because M1 history is limited)
-• Live data: Perfect accuracy for current/recent candles
-• Broker dependent: Some brokers have limited M1 history
-
-
-🔧 TROUBLESHOOTING
-═════════════════════════════════════════════════════════════════════════════
-
-Q: I don't see any lines
-A: Set DisplayMode = 0 (Overlay), increase PathWidth to 3-5
-
-Q: Lines are too thin
-A: Increase PathWidth (try 3 or 4)
-
-Q: Can't see the dots
-A: Make sure ShowPoints = true, increase PointSize to 4-5
-
-Q: High/Low order seems wrong
-A: Check if M1 data is available on your broker
-  (older candles may show UNKNOWN if M1 data is missing)
-
-Q: Indicator not loading
-A: Check console (View → Toolbox → Experts tab) for error messages
-
-
-📖 READING THE INFO DISPLAY
-═════════════════════════════════════════════════════════════════════════════
-
-When ShowInfo = true, you'll see:
-
-  Price Path Analyzer
-  Symbol: EURUSD
-  Timeframe: M5
-  Lower TF: M1
-  Points: 15
-  
-  Colors:
-  Green(O) → Blue(H/L) → Orange(C)
-  
-  Mode: Overlay
-
-
-🎓 LEARNING PATH
-═════════════════════════════════════════════════════════════════════════════
-
-1. Install indicator ✓
-2. Open any chart (M5 recommended)
-3. Watch the paths appear
-4. Play with settings (colors, width, etc)
-5. Compare different time periods
-6. Study how real price moves (not just candles)
-7. Use insights for your trading strategy
-
-
-🚀 NEXT STEPS
-═════════════════════════════════════════════════════════════════════════════
-
-After installation:
-
-1. Try Display Mode 0, 1, 2 - see which you prefer
-2. Experiment with colors that match your chart background
-3. Look at different pairs and timeframes
-4. Study 5-10 candles (CandlesToAnalyze = 5-10)
-5. Look for patterns
-6. Use observations to validate your trading ideas
-
-
-═════════════════════════════════════════════════════════════════════════════
-                     Ready? Extract, Install, Use!
-═════════════════════════════════════════════════════════════════════════════
-
-Questions? Check PPA_GUIDE_FA.txt for detailed Farsi instructions.
-
-Enjoy analyzing real price paths! 📊
+فایل رو توی متاادیتور هم میتونی باز کنی (MetaEditor → فایل رو از Navigator بزن) یا هر وقت خواستی دوباره برات نمایشش بدم. اگه خواستی بخشی از راهنما رو تغییر بدم یا جایی اضافه/کم کنم، بگو. 📖
