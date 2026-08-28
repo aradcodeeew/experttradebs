@@ -135,6 +135,12 @@ string PanelChildNames[8];
 int    PanelChildOffX[8];
 int    PanelChildOffY[8];
 
+//--- Set true when the last click landed on one of our chart objects
+//    (panel buttons, background, drag bar, or the selection lines).
+//    Used so CHARTEVENT_CLICK never treats an interface click as a
+//    chart selection click (fixes green line sticking to the right edge).
+bool ClickedOnInterface = false;
+
 //--- T-Line (cx/cy/n/t) projection state
 int    TLineStartBar = -1;
 int    TLineEndBar   = -1;
@@ -379,6 +385,8 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 //--- Button clicks
    if(id == CHARTEVENT_OBJECT_CLICK)
      {
+      ClickedOnInterface = true;
+
       if(sparam == O_BTN_L)
         {
          LinesVisible = !LinesVisible;
@@ -453,6 +461,14 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
      {
       int x = (int)lparam;
       int y = (int)dparam;
+
+      // If the last click was on one of our objects (button, line,
+      // background), it must NOT create or move a selection.
+      if(ClickedOnInterface)
+        {
+         ClickedOnInterface = false;
+         return;
+        }
 
       if(IsPointOnPanel(x, y))
          return;
@@ -1715,8 +1731,13 @@ void UpdatePathButton()
 //+------------------------------------------------------------------+
 bool IsPointOnPanel(int x, int y)
   {
-   if(x >= PanelX && x <= PanelX + PN_W &&
-      y >= PanelY && y <= PanelY + PN_H)
+   int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS);
+   int x1 = cw - PanelX - PN_W;
+   int x2 = x1 + PN_W;
+   int y1 = PanelY;
+   int y2 = y1 + PN_H;
+   if(x >= x1 && x <= x2 && y >= y1 && y <= y2)
+      // (coordinates are computed above for the right-anchored panel)
       return(true);
    return(false);
   }
