@@ -74,6 +74,8 @@ input int             PanelTopY  = 150;     // Panel Y from the TOP edge (px)
 #define O_BTN_C    PREFIX "Btn_Calc"
 #define O_BTN_P    PREFIX "Btn_Path"
 #define O_BTN_X    PREFIX "Btn_Clear"
+#define O_BTN_H    PREFIX "Btn_Hide"
+#define O_BTN_S    PREFIX "Btn_Show"
 #define O_CANVAS   PREFIX "PathCanvas"
 
 #define ALL_TF     0xFFFFFFFF
@@ -81,10 +83,11 @@ input int             PanelTopY  = 150;     // Panel Y from the TOP edge (px)
 
 //--- terminal global variable that remembers which symbol this panel belongs to
 #define GV_SYM     PREFIX "GV_" + IntegerToString(ChartID()) + "_Symbol"
+#define GV_HIDE    PREFIX "GV_" + IntegerToString(ChartID()) + "_HideState"
 
 //--- Panel geometry
 #define PN_W       204
-#define PN_H       180
+#define PN_H       204
 
 //--- Global Variables
 struct SelectionState
@@ -124,6 +127,8 @@ int  PanelY = 110;
 bool LinesVisible = true;
 bool PathVisible  = false;
 bool PathDrawn    = false;
+bool PanelHidden  = false;        // whole panel collapsed (only Show button remains)
+bool SaveTableVisible = false;    // path table visibility remembered before hiding
 
 CCanvas Canvas;
 
@@ -131,9 +136,9 @@ double PathHighBuf[];
 double PathLowBuf[];
 int    MySubwindow = 1;
 
-string PanelChildNames[8];
-int    PanelChildOffX[8];
-int    PanelChildOffY[8];
+string PanelChildNames[12];
+int    PanelChildOffX[12];
+int    PanelChildOffY[12];
 
 //--- Set true when the last click landed on one of our chart objects
 //    (panel buttons, background, drag bar, or the selection lines).
@@ -194,6 +199,8 @@ int OnInit()
    CreatePanel();
    UpdateLinesButton();
    UpdatePathButton();
+   LoadHideState();
+   ApplyPanelHidden();
 
    if(Sel.HasSelection)
      {
@@ -246,6 +253,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, PREFIX);
    Canvas.Destroy();
    GlobalVariableDel(GV_SYM);
+   GlobalVariableDel(GV_HIDE);
    ChartRedraw();
   }
 
@@ -301,7 +309,8 @@ bool RestoreStateFromObjects()
      {
       ObjectsDeleteAll(0, PREFIX);
       Canvas.Destroy();
-      SaveSymbolMarker();
+      LoadHideState();
+   SaveSymbolMarker();
       return(false);
      }
 
@@ -386,6 +395,18 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
    if(id == CHARTEVENT_OBJECT_CLICK)
      {
       ClickedOnInterface = true;
+
+      //--- Hide/Show: collapse / restore the whole panel (+ path table)
+      if(sparam == O_BTN_H)
+        {
+         HidePanel();
+         return;
+        }
+      if(sparam == O_BTN_S)
+        {
+         ShowPanel();
+         return;
+        }
 
       if(sparam == O_BTN_L)
         {
@@ -631,6 +652,10 @@ void TogglePath()
         {
          ObjectSetInteger(0, O_CANVAS, OBJPROP_TIMEFRAMES, ALL_TF);
          Canvas.Update(true);
+
+   //--- keep the path table hidden while the panel is collapsed
+   if(PanelHidden)
+      SetObjTimeframes(O_CANVAS, false);
         }
       else
          ObjectSetInteger(0, O_CANVAS, OBJPROP_TIMEFRAMES, NO_TF);
@@ -1590,7 +1615,7 @@ void CreatePanel()
    ObjectSetInteger(0, O_STAT, OBJPROP_ZORDER, 101);
    ObjectSetInteger(0, O_STAT, OBJPROP_TIMEFRAMES, ALL_TF);
 
-//--- buttons: 1 column x 4 rows
+//--- buttons: 1 column x 5 rows
    RegisterChild(O_BTN_L, 12, 64);
    CreateButton(O_BTN_L, PanelX + 12, PanelY + 64, 180, 24, "Lines: ON", C'20,80,40');
 
@@ -1602,6 +1627,15 @@ void CreatePanel()
 
    RegisterChild(O_BTN_X, 12, 148);
    CreateButton(O_BTN_X, PanelX + 12, PanelY + 148, 180, 24, "Clear", C'110,40,40');
+
+//--- hide button (gray) + big show button at the BOTTOM of the panel
+//    (when collapsed, only this Show button remains - at the bottom,
+//     clear and easy to press)
+   RegisterChild(O_BTN_H, 12, 176);
+   CreateButton(O_BTN_H, PanelX + 12, PanelY + 176, 180, 24, "Hide", C'85,85,90');
+
+   RegisterChild(O_BTN_S, 12, PN_H - 30);
+   CreateButton(O_BTN_S, PanelX + 12, PanelY + PN_H - 30, 64, 24, "Show", C'20,80,140');
 
    ChartRedraw();
   }
@@ -1729,6 +1763,86 @@ void UpdatePathButton()
 //+------------------------------------------------------------------+
 //| Check if pixel point is inside the panel                         |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Collapse / restore the whole panel (+ the path table)            |
+//+------------------------------------------------------------------+
+void ApplyPanelHidden()
+  {
+   bool vis = !PanelHidden;
+
+   SetObjTimeframes(O_BG,    vis);
+   SetObjTimeframes(O_GRAB,  vis);
+   SetObjTimeframes(O_TITLE, vis);
+   SetObjTimeframes(O_STAT,  vis);
+   SetObjTimeframes(O_BTN_L, vis);
+   SetObjTimeframes(O_BTN_C, vis);
+   SetObjTimeframes(O_BTN_P, vis);
+   SetObjTimeframes(O_BTN_X, vis);
+   SetObjTimeframes(O_BTN_H, vis);
+   SetObjTimeframes(O_BTN_S, PanelHidden);   // Show button visible only while collapsed
+   ChartRedraw();
+  }
+
+//+------------------------------------------------------------------+
+//| Hide: collapse the whole panel and the path table                |
+//+------------------------------------------------------------------+
+void HidePanel()
+  {
+   if(PanelHidden)
+      return;
+
+   PanelHidden      = true;
+   SaveTableVisible = PathVisible;   // remember if the path table was on
+
+   ApplyPanelHidden();
+   SetObjTimeframes(O_CANVAS, false);  // hide the path table (the lower panel)
+   SaveHideState();
+  }
+
+//+------------------------------------------------------------------+
+//| Show: restore the whole panel and the path table                 |
+//+------------------------------------------------------------------+
+void ShowPanel()
+  {
+   if(!PanelHidden)
+      return;
+
+   PanelHidden = false;
+   ApplyPanelHidden();
+
+   if(PathDrawn && SaveTableVisible)
+      SetObjTimeframes(O_CANVAS, true);
+
+   SaveHideState();
+  }
+
+//+------------------------------------------------------------------+
+//| Persist collapse state in a terminal global variable             |
+//| (survives chart timeframe changes)                               |
+//+------------------------------------------------------------------+
+void SaveHideState()
+  {
+   GlobalVariableSet(GV_HIDE, (PanelHidden ? 1.0 : 0.0) + (SaveTableVisible ? 2.0 : 0.0));
+  }
+
+//+------------------------------------------------------------------+
+//| Load collapse state from terminal global variable                |
+//+------------------------------------------------------------------+
+void LoadHideState()
+  {
+   if(GlobalVariableCheck(GV_HIDE))
+     {
+      int v = (int)MathRound(GlobalVariableGet(GV_HIDE));
+      PanelHidden      = ((v & 1) != 0);
+      SaveTableVisible = ((v & 2) != 0);
+     }
+   else
+     {
+      PanelHidden      = false;
+      SaveTableVisible = false;
+     }
+  }
+
 bool IsPointOnPanel(int x, int y)
   {
    int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS);
